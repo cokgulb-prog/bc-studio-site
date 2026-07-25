@@ -80,6 +80,14 @@ a {
   font-size: 1.25rem;
   color: var(--black);
   letter-spacing: -0.2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.logo-icon {
+  height: 26px;
+  width: auto;
+  display: block;
 }
 .logo span {
   font-weight: 500;
