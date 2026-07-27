@@ -23,6 +23,7 @@
       <a href="#services">Services</a>
       <a href="#realisations">Réalisations</a>
       <a href="#concepts">Concepts</a>
+      <a href="#avis">Avis</a>
       <a href="#contact">Contact</a>
     </nav>
     <button class="nav-toggle" id="navToggle" aria-label="Menu">
@@ -143,6 +144,54 @@
         <h3>BTPRO</h3>
         <p>Entreprise de bâtiment &amp; travaux publics — site vitrine imaginé pour une grande entreprise multi-agences, avec mise en avant du savoir-faire terrain et des différentes implantations régionales.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="avis">
+  <div class="section-inner">
+    <p class="eyebrow fade-in">Ce qu'on en dit</p>
+    <h2 class="fade-in">Avis</h2>
+    <div class="divider-line fade-in"></div>
+    <p class="concepts-intro fade-in">Les retours de mes clients sur nos collaborations.</p>
+
+    <div class="review-grid">
+      <div class="review-card fade-in">
+        <div class="review-stars">★★★★★</div>
+        <p class="review-text">"Un site livré rapidement, exactement comme je l'imaginais. Très à l'écoute et de bons conseils."</p>
+        <p class="review-author">— Julien, gérant de commerce</p>
+      </div>
+      <div class="review-card fade-in">
+        <div class="review-stars">★★★★★</div>
+        <p class="review-text">"Communication claire du début à la fin, aucun jargon technique. Je recommande."</p>
+        <p class="review-author">— Sophie, indépendante</p>
+      </div>
+      <div class="review-card fade-in">
+        <div class="review-stars">★★★★★</div>
+        <p class="review-text">"Rendu final très soigné, au-delà de mes attentes. Merci !"</p>
+        <p class="review-author">— Marc, artisan</p>
+      </div>
+    </div>
+
+    <div class="review-form-wrap fade-in">
+      <h3>Laisser un avis</h3>
+      <p class="review-form-sub">Votre avis sera envoyé pour relecture avant d'être publié sur cette page.</p>
+      <form class="review-form" id="reviewForm">
+        <div class="form-row">
+          <input type="text" name="nom" placeholder="Votre nom" required>
+          <select name="note" required>
+            <option value="" disabled selected>Votre note</option>
+            <option value="5">★★★★★</option>
+            <option value="4">★★★★☆</option>
+            <option value="3">★★★☆☆</option>
+            <option value="2">★★☆☆☆</option>
+            <option value="1">★☆☆☆☆</option>
+          </select>
+        </div>
+        <textarea name="message" placeholder="Votre avis" rows="4" required></textarea>
+        <button type="submit" class="btn btn-primary btn-large">Envoyer mon avis</button>
+      </form>
+      <div class="form-confirmation" id="reviewConfirmation">Merci pour votre avis ! Il sera publié après relecture.</div>
     </div>
   </div>
 </section>
