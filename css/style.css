@@ -178,12 +178,40 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
   padding: 60px 32px;
   background: var(--white);
 }
+.hero-grid {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: center;
+}
 .hero-inner {
-  max-width: 640px;
+  max-width: 480px;
+  text-align: center;
+  margin: 0 auto;
+}
+.hero-window {
+  display: flex;
+}
+.hero-mock {
+  width: 100%;
+}
+.hero-mock-body {
+  padding: 32px 34px;
+  text-align: left;
+}
+.hero-mock-body p {
+  font-size: 0.95rem;
+  color: var(--gray);
+  margin-bottom: 20px;
+}
+.hero-mock-body p:last-child {
+  margin-bottom: 0;
 }
 .kicker {
   font-size: 0.85rem;
@@ -654,6 +682,13 @@ a {
 @media (max-width: 960px) {
   .hero h1 {
     font-size: 2.6rem;
+  }
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .hero-inner {
+    max-width: 100%;
   }
   .card-grid {
     grid-template-columns: 1fr;
