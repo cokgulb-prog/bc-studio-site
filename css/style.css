@@ -363,6 +363,60 @@ a {
   color: var(--gray) !important;
 }
 
+/* Processus */
+.process-list {
+  margin-top: 56px;
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: left;
+}
+.process-step {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  column-gap: 28px;
+  position: relative;
+  padding-bottom: 48px;
+}
+.process-step:last-child {
+  padding-bottom: 0;
+}
+.process-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 56px;
+  left: 27px;
+  width: 1.5px;
+  height: calc(100% - 56px);
+  background: var(--border);
+}
+.process-marker {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--black);
+  color: var(--white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Fraunces", serif;
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.05rem;
+  position: relative;
+  z-index: 1;
+}
+.process-content h3 {
+  font-size: 1.2rem;
+  font-style: italic;
+  margin-bottom: 8px;
+  margin-top: 10px;
+}
+.process-content p {
+  color: var(--gray);
+  font-size: 0.95rem;
+}
+
 /* Concepts */
 .concepts-intro {
   max-width: 640px;
