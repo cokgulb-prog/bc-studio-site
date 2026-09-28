@@ -679,6 +679,67 @@ a {
   color: rgba(255,255,255,0.65);
   margin-bottom: 34px;
 }
+.contact-form {
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: left;
+}
+.contact-form .form-row {
+  display: flex;
+  gap: 16px;
+}
+.contact-form input,
+.contact-form textarea {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--white);
+  background: rgba(255,255,255,0.06);
+}
+.contact-form input::placeholder,
+.contact-form textarea::placeholder {
+  color: rgba(255,255,255,0.45);
+}
+.contact-form input:focus,
+.contact-form textarea:focus {
+  outline: none;
+  border-color: rgba(255,255,255,0.6);
+}
+.contact-form textarea {
+  resize: vertical;
+}
+.contact-form button {
+  align-self: center;
+  margin-top: 6px;
+  border: none;
+  cursor: pointer;
+}
+.contact-form button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.form-honey {
+  display: none !important;
+}
+.contact-block .form-confirmation {
+  max-width: 560px;
+  margin: 20px auto 0;
+}
+.form-confirmation.error {
+  background: #f6e3e3;
+  color: #7a1f1f;
+}
+.contact-alt {
+  margin: 56px 0 20px;
+  font-size: 0.9rem;
+  color: rgba(255,255,255,0.45);
+}
 .contact-actions {
   display: flex;
   gap: 16px;
@@ -727,7 +788,8 @@ a {
   .review-grid {
     grid-template-columns: 1fr;
   }
-  .review-form .form-row {
+  .review-form .form-row,
+  .contact-form .form-row {
     flex-direction: column;
   }
 }
