@@ -35,19 +35,77 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
 
+  const FORM_ENDPOINT = 'https://formsubmit.co/ajax/cokgulb@gmail.com';
+
+  const sendForm = async (data) => {
+    const res = await fetch(FORM_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === 'false' || json.success === false) throw new Error(json.message || 'Erreur');
+    return json;
+  };
+
+  const contactForm = document.getElementById('contactForm');
+  const contactConfirmation = document.getElementById('contactConfirmation');
+  if (contactForm) {
+    contactForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (contactForm._honey.value) return;
+      const button = contactForm.querySelector('button');
+      button.disabled = true;
+      button.textContent = 'Envoi en cours…';
+      contactConfirmation.classList.remove('visible', 'error');
+      try {
+        await sendForm({
+          _subject: `Nouvelle demande BC Studio — ${contactForm.nom.value}`,
+          _template: 'table',
+          _captcha: 'false',
+          _replyto: contactForm.email.value,
+          Nom: contactForm.nom.value,
+          Email: contactForm.email.value,
+          'Téléphone': contactForm.telephone.value || '—',
+          Message: contactForm.message.value
+        });
+        contactConfirmation.textContent = 'Merci ! Votre demande a bien été envoyée. Je vous réponds sous 24 à 48 h.';
+        contactForm.reset();
+      } catch (err) {
+        contactConfirmation.textContent = "Oups, l'envoi n'a pas fonctionné. Écrivez-moi directement à cokgulb@gmail.com.";
+        contactConfirmation.classList.add('error');
+      }
+      contactConfirmation.classList.add('visible');
+      button.disabled = false;
+      button.textContent = 'Envoyer ma demande';
+    });
+  }
+
   const reviewForm = document.getElementById('reviewForm');
   const reviewConfirmation = document.getElementById('reviewConfirmation');
   if (reviewForm) {
-    reviewForm.addEventListener('submit', (e) => {
+    reviewForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const nom = reviewForm.nom.value;
-      const note = reviewForm.note.value;
-      const message = reviewForm.message.value;
-      const sujet = encodeURIComponent(`Nouvel avis sur BC Studio — ${nom}`);
-      const corps = encodeURIComponent(`Nom : ${nom}\nNote : ${note}/5\nAvis : ${message}`);
-      window.location.href = `mailto:cokgulb@gmail.com?subject=${sujet}&body=${corps}`;
+      const button = reviewForm.querySelector('button');
+      button.disabled = true;
+      reviewConfirmation.classList.remove('visible', 'error');
+      try {
+        await sendForm({
+          _subject: `Nouvel avis sur BC Studio — ${reviewForm.nom.value}`,
+          _template: 'table',
+          _captcha: 'false',
+          Nom: reviewForm.nom.value,
+          Note: `${reviewForm.note.value}/5`,
+          Avis: reviewForm.message.value
+        });
+        reviewConfirmation.textContent = 'Merci pour votre avis ! Il sera publié après relecture.';
+        reviewForm.reset();
+      } catch (err) {
+        reviewConfirmation.textContent = "Oups, l'envoi n'a pas fonctionné. Réessayez dans un instant.";
+        reviewConfirmation.classList.add('error');
+      }
       reviewConfirmation.classList.add('visible');
-      reviewForm.reset();
+      button.disabled = false;
     });
   }
 });
