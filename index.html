@@ -41,7 +41,7 @@
     <div class="divider-line"></div>
     <p class="hero-text">Je conçois des sites vitrine sur-mesure, sobres et efficaces, pour donner à votre activité une présence en ligne claire et professionnelle.</p>
     <div class="hero-actions">
-      <a href="mailto:cokgulb@gmail.com" class="btn btn-primary">Me contacter</a>
+      <a href="#contact" class="btn btn-primary">Me contacter</a>
       <a href="#services" class="btn btn-outline">Voir mes services</a>
     </div>
   </div>
@@ -165,8 +165,20 @@
 
     <div class="contact-block fade-in">
       <p class="contact-text">Discutons de votre projet de site vitrine — sans engagement.</p>
+      <form class="contact-form" id="contactForm">
+        <input type="text" name="_honey" class="form-honey" tabindex="-1" autocomplete="off">
+        <div class="form-row">
+          <input type="text" name="nom" placeholder="Votre nom" required>
+          <input type="email" name="email" placeholder="Votre email" required>
+        </div>
+        <input type="tel" name="telephone" placeholder="Votre téléphone (facultatif)">
+        <textarea name="message" placeholder="Parlez-moi de votre projet : activité, besoins, délais…" rows="5" required></textarea>
+        <button type="submit" class="btn btn-primary btn-large">Envoyer ma demande</button>
+      </form>
+      <div class="form-confirmation" id="contactConfirmation"></div>
+      <p class="contact-alt">Vous préférez écrire ou appeler directement ?</p>
       <div class="contact-actions">
-        <a href="mailto:cokgulb@gmail.com" class="btn btn-primary btn-large">✉ cokgulb@gmail.com</a>
+        <a href="mailto:cokgulb@gmail.com" class="btn btn-outline btn-large">✉ cokgulb@gmail.com</a>
         <a href="tel:+33669277556" class="btn btn-outline btn-large">📞 06 69 27 75 56</a>
       </div>
     </div>
