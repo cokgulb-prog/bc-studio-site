@@ -1,0 +1,496 @@
+--[[
+	USINE À BONBONS TYCOON — tycoon classique (machines, tapis roulant, améliorations)
+	À placer dans ServerScriptService (un seul Script, rien d'autre à construire).
+	6 usines autour d'une place centrale. Le joueur réclame une usine, achète les
+	machines une par une, encaisse l'argent et peut renaître pour doubler ses revenus.
+	Conseil : règle le nombre maximum de joueurs du serveur sur 6.
+]]
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local Debris = game:GetService("Debris")
+
+---------------------------------------------------------------- réglages
+local PLOT_COUNT = 6
+local PLOT_RADIUS = 110
+local DROP_INTERVAL = 2 -- secondes entre deux bonbons par machine
+local CONVEYOR_SPEED = 10
+local REBIRTH_PRICE = 5000000
+
+-- emplacements des machines (x, z) : le tapis roulant est sur z = 10
+local DROPPER_SLOTS = { { -18, 16 }, { -18, 4 }, { -12, 16 }, { -12, 4 }, { -6, 16 }, { -6, 4 } }
+local UPGRADER_SLOTS = { 2, 9, 16 } -- position x des portiques
+
+local ITEMS = { -- achetés dans l'ordre
+	{ kind = "dropper", name = "Machine à bonbons", price = 0, slot = 1, value = 1, color = Color3.fromRGB(255, 120, 160) },
+	{ kind = "dropper", name = "Machine à sucettes", price = 60, slot = 2, value = 2, color = Color3.fromRGB(120, 200, 255) },
+	{ kind = "upgrader", name = "Enrobage de sucre ×2", price = 300, slot = 1, mult = 2, color = Color3.fromRGB(255, 255, 255) },
+	{ kind = "dropper", name = "Machine à chocolat", price = 900, slot = 3, value = 6, color = Color3.fromRGB(120, 70, 40) },
+	{ kind = "walls", name = "Murs de l'usine", price = 2000 },
+	{ kind = "dropper", name = "Machine à caramel", price = 5000, slot = 4, value = 18, color = Color3.fromRGB(230, 150, 50) },
+	{ kind = "upgrader", name = "Glaçage ×2", price = 14000, slot = 2, mult = 2, color = Color3.fromRGB(150, 230, 255) },
+	{ kind = "dropper", name = "Machine à guimauve", price = 40000, slot = 5, value = 60, color = Color3.fromRGB(255, 200, 230) },
+	{ kind = "roof", name = "Toit de l'usine", price = 90000 },
+	{ kind = "dropper", name = "Machine à bonbons d'or", price = 250000, slot = 6, value = 220, color = Color3.fromRGB(255, 215, 0) },
+	{ kind = "upgrader", name = "Paillettes magiques ×3", price = 800000, slot = 3, mult = 3, color = Color3.fromRGB(220, 120, 255) },
+	{ kind = "statue", name = "Statue du Roi du Bonbon", price = 3000000 },
+}
+
+---------------------------------------------------------------- outils
+local function make(class, props, parent)
+	local inst = Instance.new(class)
+	for k, v in pairs(props) do
+		inst[k] = v
+	end
+	inst.Parent = parent
+	return inst
+end
+
+local world = make("Folder", { Name = "Monde" }, workspace)
+
+local function block(props, parent)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in pairs(props) do
+		p[k] = v
+	end
+	p.Parent = parent or world
+	return p
+end
+
+local function label(part, text, height)
+	local bb = make("BillboardGui", {
+		Size = UDim2.new(0, 260, 0, 70),
+		StudsOffset = Vector3.new(0, height or 4, 0),
+		MaxDistance = 120,
+	}, part)
+	return make("TextLabel", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBlack,
+		TextScaled = true,
+	}, bb)
+end
+
+local SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi" }
+local function fmt(n)
+	local i = 1
+	while n >= 1000 and i < #SUFFIX do
+		n = n / 1000
+		i += 1
+	end
+	if i == 1 then
+		return tostring(math.floor(n))
+	end
+	return string.format("%.2f%s", n, SUFFIX[i])
+end
+
+local function createHud(player)
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "HUD"
+	gui.ResetOnSpawn = false
+	make("TextLabel", {
+		Name = "Notif",
+		Size = UDim2.new(0.7, 0, 0, 48),
+		Position = UDim2.new(0.15, 0, 0.14, 0),
+		BackgroundTransparency = 1,
+		TextColor3 = Color3.fromRGB(255, 230, 90),
+		TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBlack,
+		TextSize = 26,
+		Text = "",
+	}, gui)
+	local playerGui = player:WaitForChild("PlayerGui", 10)
+	if playerGui then
+		gui.Parent = playerGui
+	end
+end
+
+local function notify(player, text)
+	local playerGui = player:FindFirstChild("PlayerGui")
+	local gui = playerGui and playerGui:FindFirstChild("HUD")
+	if not gui then
+		return
+	end
+	local stamp = os.clock()
+	gui.Notif.Text = text
+	gui.Notif:SetAttribute("Stamp", stamp)
+	task.delay(3.5, function()
+		if gui.Parent and gui.Notif:GetAttribute("Stamp") == stamp then
+			gui.Notif.Text = ""
+		end
+	end)
+end
+
+---------------------------------------------------------------- données
+local store
+pcall(function()
+	store = DataStoreService:GetDataStore("UsineBonbons_v1")
+end)
+
+local profiles = {} -- [player] = { cash, rebirths (IntValues), idx, loaded, plot }
+local plots = {}
+
+local function save(player)
+	local profile = profiles[player]
+	if not store or not profile or not profile.loaded then
+		return
+	end
+	pcall(function()
+		store:SetAsync("u_" .. player.UserId, {
+			cash = profile.cash.Value,
+			rebirths = profile.rebirths.Value,
+			idx = profile.idx,
+		})
+	end)
+end
+
+---------------------------------------------------------------- usines
+-- toutes les positions sont exprimées dans le repère local de l'usine (sol = y 0)
+local function place(plot, props, x, y, z, parent)
+	local p = block(props, parent or plot.built)
+	p.CFrame = plot.cf * CFrame.new(x, y, z)
+	return p
+end
+
+local function refreshCash(plot)
+	plot.cashLabel.Text = "💰 ENCAISSER\n" .. fmt(plot.bank) .. " $"
+end
+
+local function refreshButton(plot)
+	local profile = plot.owner and profiles[plot.owner]
+	if not profile then
+		plot.button.Transparency = 1
+		plot.button.CanTouch = false
+		plot.buttonLabel.Text = ""
+		return
+	end
+	plot.button.Transparency = 0
+	plot.button.CanTouch = true
+	local item = ITEMS[profile.idx + 1]
+	if item then
+		plot.button.Color = Color3.fromRGB(60, 220, 100)
+		plot.buttonLabel.Text = item.name .. "\n" .. (item.price == 0 and "GRATUIT" or (fmt(item.price) .. " $"))
+	else
+		plot.button.Color = Color3.fromRGB(255, 215, 0)
+		plot.buttonLabel.Text = "⭐ RENAISSANCE (revenus +100 %)\n" .. fmt(REBIRTH_PRICE) .. " $"
+	end
+end
+
+local function buildItem(plot, item)
+	if item.kind == "dropper" then
+		local slot = DROPPER_SLOTS[item.slot]
+		local x, z = slot[1], slot[2]
+		local body = place(plot, { Name = item.name, Size = Vector3.new(3, 8, 3), Color = item.color, Material = Enum.Material.Metal }, x, 4, z)
+		place(plot, { Size = Vector3.new(3, 1, 6), Color = item.color, Material = Enum.Material.Metal }, x, 8.5, (z + 10) / 2)
+		label(body, item.name, 6)
+		table.insert(plot.droppers, { x = x, value = item.value, color = item.color })
+	elseif item.kind == "upgrader" then
+		local x = UPGRADER_SLOTS[item.slot]
+		place(plot, { Size = Vector3.new(2, 1, 8), Color = item.color, Material = Enum.Material.Metal }, x, 6.5, 10)
+		local beam = place(plot, {
+			Name = item.name,
+			Size = Vector3.new(0.6, 4, 6),
+			Color = item.color,
+			Material = Enum.Material.Neon,
+			Transparency = 0.5,
+			CanCollide = false,
+		}, x, 4, 10)
+		label(beam, item.name, 5)
+		local tag = "Up" .. item.slot
+		beam.Touched:Connect(function(hit)
+			if hit.Name == "Bonbon" and hit.Parent == plot.drops and not hit:GetAttribute(tag) then
+				hit:SetAttribute(tag, true)
+				hit:SetAttribute("Value", hit:GetAttribute("Value") * item.mult)
+				hit.Material = Enum.Material.Neon
+			end
+		end)
+	elseif item.kind == "walls" then
+		local wall = { Color = Color3.fromRGB(255, 170, 200), Material = Enum.Material.Brick }
+		wall.Size = Vector3.new(64, 14, 1)
+		place(plot, wall, 0, 7, 31.5)
+		wall.Size = Vector3.new(1, 14, 64)
+		place(plot, wall, -31.5, 7, 0)
+		place(plot, wall, 31.5, 7, 0)
+	elseif item.kind == "roof" then
+		local roof = place(plot, {
+			Size = Vector3.new(64, 1, 64),
+			Color = Color3.fromRGB(255, 255, 255),
+			Material = Enum.Material.Glass,
+			Transparency = 0.5,
+		}, 0, 14.5, 0)
+		make("PointLight", { Range = 60, Brightness = 2 }, roof)
+	elseif item.kind == "statue" then
+		local gold = { Color = Color3.fromRGB(255, 215, 0), Material = Enum.Material.Neon }
+		gold.Size = Vector3.new(4, 10, 4)
+		local base = place(plot, gold, -22, 5, -15)
+		gold.Size = Vector3.new(6, 6, 6)
+		gold.Shape = Enum.PartType.Ball
+		place(plot, gold, -22, 13, -15)
+		label(base, "👑 Roi du Bonbon", 12)
+	end
+end
+
+local function clearPlot(plot)
+	plot.built:ClearAllChildren()
+	plot.drops:ClearAllChildren()
+	plot.droppers = {}
+	plot.bank = 0
+	refreshCash(plot)
+end
+
+local function rebuildPlot(plot, profile)
+	clearPlot(plot)
+	for i = 1, profile.idx do
+		buildItem(plot, ITEMS[i])
+	end
+	refreshButton(plot)
+end
+
+local function claim(plot, player)
+	local profile = profiles[player]
+	if plot.owner or not profile or profile.plot then
+		return
+	end
+	plot.owner = player
+	profile.plot = plot
+	plot.gate.Transparency = 1
+	plot.gate.CanTouch = false
+	plot.gateLabel.Text = "Usine de " .. player.DisplayName
+	rebuildPlot(plot, profile)
+	notify(player, "🏭 C'est ton usine ! Marche sur le bouton vert pour acheter.")
+end
+
+local function release(plot)
+	plot.owner = nil
+	plot.gate.Transparency = 0.4
+	plot.gate.CanTouch = true
+	plot.gateLabel.Text = "Usine libre\ntouche pour la réclamer"
+	clearPlot(plot)
+	refreshButton(plot)
+end
+
+local function onButton(plot, player)
+	local profile = profiles[player]
+	if plot.owner ~= player or not profile or plot.busy then
+		return
+	end
+	plot.busy = true
+	task.delay(0.6, function()
+		plot.busy = false
+	end)
+
+	local item = ITEMS[profile.idx + 1]
+	local price = item and item.price or REBIRTH_PRICE
+	if profile.cash.Value < price then
+		notify(player, "Il te manque " .. fmt(price - profile.cash.Value) .. " $")
+		return
+	end
+	profile.cash.Value -= price
+	if item then
+		profile.idx += 1
+		buildItem(plot, item)
+		refreshButton(plot)
+	else
+		profile.idx = 0
+		profile.cash.Value = 0
+		profile.rebirths.Value += 1
+		rebuildPlot(plot, profile)
+		notify(player, "⭐ Renaissance n°" .. profile.rebirths.Value .. " ! Revenus multipliés")
+	end
+end
+
+local function buildPlot(index)
+	local angle = (index - 1) / PLOT_COUNT * math.pi * 2
+	local pos = Vector3.new(math.cos(angle) * PLOT_RADIUS, 0, math.sin(angle) * PLOT_RADIUS)
+	local folder = make("Folder", { Name = "Usine" .. index }, world)
+	local plot = {
+		cf = CFrame.lookAt(pos, Vector3.new(0, 0, 0)),
+		owner = nil,
+		bank = 0,
+		busy = false,
+		droppers = {},
+		built = make("Folder", { Name = "Achats" }, folder),
+		drops = make("Folder", { Name = "Bonbons" }, folder),
+	}
+	plots[index] = plot
+
+	local metal = Enum.Material.Metal
+	place(plot, { Name = "Sol", Size = Vector3.new(64, 0.4, 64), Color = Color3.fromRGB(245, 235, 240), Material = Enum.Material.SmoothPlastic }, 0, 0.2, 0, folder)
+
+	-- tapis roulant (se déplace vers +x local) et rebords
+	local conveyor = place(plot, { Name = "Tapis", Size = Vector3.new(44, 1, 6), Color = Color3.fromRGB(50, 50, 60), Material = metal }, 0, 1.5, 10, folder)
+	conveyor.AssemblyLinearVelocity = plot.cf:VectorToWorldSpace(Vector3.new(CONVEYOR_SPEED, 0, 0))
+	place(plot, { Size = Vector3.new(44, 1.5, 0.5), Color = Color3.fromRGB(90, 90, 100), Material = metal }, 0, 2.25, 13.25, folder)
+	place(plot, { Size = Vector3.new(44, 1.5, 0.5), Color = Color3.fromRGB(90, 90, 100), Material = metal }, 0, 2.25, 6.75, folder)
+
+	-- collecteur au bout du tapis
+	local collector = place(plot, { Name = "Collecteur", Size = Vector3.new(4, 5, 8), Color = Color3.fromRGB(255, 80, 120), Material = Enum.Material.Neon }, 24, 2.5, 10, folder)
+	collector.Touched:Connect(function(hit)
+		if hit.Name == "Bonbon" and hit.Parent == plot.drops then
+			local profile = plot.owner and profiles[plot.owner]
+			local mult = profile and (1 + profile.rebirths.Value) or 1
+			plot.bank += (hit:GetAttribute("Value") or 0) * mult
+			hit:Destroy()
+			refreshCash(plot)
+		end
+	end)
+
+	-- plateforme pour encaisser
+	local cashPad = place(plot, { Name = "Caisse", Size = Vector3.new(8, 0.6, 8), Color = Color3.fromRGB(255, 215, 0), Material = Enum.Material.Neon }, 20, 0.5, -10, folder)
+	plot.cashLabel = label(cashPad, "", 5)
+	cashPad.Touched:Connect(function(hit)
+		local player = hit.Parent and Players:GetPlayerFromCharacter(hit.Parent)
+		local profile = player and profiles[player]
+		if profile and plot.owner == player and plot.bank > 0 then
+			profile.cash.Value += plot.bank
+			plot.bank = 0
+			refreshCash(plot)
+		end
+	end)
+
+	-- bouton d'achat
+	plot.button = place(plot, { Name = "Bouton", Size = Vector3.new(5, 0.6, 5), Material = Enum.Material.Neon }, 0, 0.5, -12, folder)
+	plot.buttonLabel = label(plot.button, "", 4)
+	plot.button.Touched:Connect(function(hit)
+		local player = hit.Parent and Players:GetPlayerFromCharacter(hit.Parent)
+		if player then
+			onButton(plot, player)
+		end
+	end)
+
+	-- porte pour réclamer l'usine
+	plot.gate = place(plot, { Name = "Porte", Size = Vector3.new(12, 8, 1), Color = Color3.fromRGB(80, 255, 140), Material = Enum.Material.Neon, CanCollide = false }, 0, 4, -31, folder)
+	plot.gateLabel = label(plot.gate, "", 6)
+	plot.gate.Touched:Connect(function(hit)
+		local player = hit.Parent and Players:GetPlayerFromCharacter(hit.Parent)
+		if player then
+			claim(plot, player)
+		end
+	end)
+
+	release(plot)
+end
+
+---------------------------------------------------------------- monde
+for _, obj in ipairs(workspace:GetChildren()) do
+	if obj:IsA("SpawnLocation") or obj.Name == "Baseplate" then
+		obj:Destroy()
+	end
+end
+
+block({
+	Name = "Sol",
+	Size = Vector3.new(420, 2, 420),
+	Position = Vector3.new(0, -1, 0),
+	Color = Color3.fromRGB(120, 200, 140),
+	Material = Enum.Material.Grass,
+})
+make("SpawnLocation", {
+	Anchored = true,
+	Size = Vector3.new(12, 1, 12),
+	Position = Vector3.new(0, 0.5, 0),
+	Color = Color3.fromRGB(255, 150, 190),
+	Material = Enum.Material.Neon,
+	Neutral = true,
+}, world)
+
+for index = 1, PLOT_COUNT do
+	buildPlot(index)
+end
+
+-- production des bonbons
+task.spawn(function()
+	while true do
+		task.wait(DROP_INTERVAL)
+		for _, plot in ipairs(plots) do
+			if plot.owner then
+				for _, dropper in ipairs(plot.droppers) do
+					local drop = Instance.new("Part")
+					drop.Name = "Bonbon"
+					drop.Size = Vector3.new(1.3, 1.3, 1.3)
+					drop.Color = dropper.color
+					drop.TopSurface = Enum.SurfaceType.Smooth
+					drop.BottomSurface = Enum.SurfaceType.Smooth
+					drop.CFrame = plot.cf * CFrame.new(dropper.x, 7.5, 10)
+					drop:SetAttribute("Value", dropper.value)
+					drop.Parent = plot.drops
+					pcall(function()
+						drop:SetNetworkOwner(nil)
+					end)
+					Debris:AddItem(drop, 40)
+				end
+			end
+		end
+	end
+end)
+
+---------------------------------------------------------------- joueurs
+local function onPlayer(player)
+	local ls = make("Folder", { Name = "leaderstats" }, player)
+	local profile = {
+		cash = make("IntValue", { Name = "Argent" }, ls),
+		rebirths = make("IntValue", { Name = "Renaissances" }, ls),
+		idx = 0,
+		loaded = false,
+		plot = nil,
+	}
+
+	if store then
+		local ok, data = pcall(function()
+			return store:GetAsync("u_" .. player.UserId)
+		end)
+		if ok then
+			profile.loaded = true
+			if type(data) == "table" then
+				profile.cash.Value = tonumber(data.cash) or 0
+				profile.rebirths.Value = tonumber(data.rebirths) or 0
+				profile.idx = math.clamp(tonumber(data.idx) or 0, 0, #ITEMS)
+			end
+		end
+	end
+	if not player.Parent then
+		return
+	end
+	profiles[player] = profile
+	createHud(player)
+	notify(player, "Touche la porte verte d'une usine libre pour commencer !")
+end
+
+Players.PlayerAdded:Connect(onPlayer)
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayer, player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	local profile = profiles[player]
+	if profile and profile.plot then
+		-- l'argent pas encore encaissé n'est pas perdu
+		profile.cash.Value += profile.plot.bank
+	end
+	save(player)
+	if profile and profile.plot then
+		release(profile.plot)
+	end
+	profiles[player] = nil
+end)
+
+game:BindToClose(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		save(player)
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(120)
+		for _, player in ipairs(Players:GetPlayers()) do
+			save(player)
+		end
+	end
+end)
