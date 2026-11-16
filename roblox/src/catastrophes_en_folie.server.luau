@@ -19,7 +19,11 @@ local ISLAND = 140 -- taille de l'île
 local LOBBY_POS = Vector3.new(320, 20, 0)
 local WIN_COINS = 25
 local PLAY_COINS = 5
-local MAX_LEVEL = 5
+local MAX_LEVEL = 20
+local RANKS = { -- victoires nécessaires, titre affiché dans le classement
+	{ 0, "Débutant" }, { 10, "Survivant" }, { 40, "Vétéran" }, { 120, "Expert" },
+	{ 300, "Maître" }, { 700, "Légende" }, { 1500, "Immortel" },
+}
 
 ---------------------------------------------------------------- outils
 local function make(class, props, parent)
@@ -216,6 +220,8 @@ local function save(player)
 			wins = profile.wins.Value,
 			speed = profile.speed,
 			jump = profile.jump,
+			daily = profile.daily,
+			streak = profile.streak,
 		})
 	end)
 end
@@ -260,9 +266,9 @@ local function applyPerks(player)
 	local profile = profiles[player]
 	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	if profile and hum then
-		hum.WalkSpeed = 16 + 2 * profile.speed
+		hum.WalkSpeed = 16 + profile.speed
 		hum.UseJumpPower = true
-		hum.JumpPower = 50 + 5 * profile.jump
+		hum.JumpPower = 50 + 3 * profile.jump
 	end
 end
 
@@ -330,7 +336,7 @@ local function shop(name, key, offsetZ, color, describe)
 		Color = color,
 		Material = Enum.Material.Neon,
 	})
-	label(stand, name .. "\n50 🪙 × niveau", 6)
+	label(stand, name .. "\n" .. MAX_LEVEL .. " niveaux", 6)
 	local prompt = make("ProximityPrompt", {
 		ObjectText = name,
 		ActionText = "Améliorer",
@@ -344,7 +350,7 @@ local function shop(name, key, offsetZ, color, describe)
 			return
 		end
 		local level = profile[key]
-		local price = 50 * (level + 1)
+		local price = math.floor(50 * 1.35 ^ level)
 		if level >= MAX_LEVEL then
 			notify(player, name .. " : niveau maximum atteint")
 		elseif profile.coins.Value < price then
@@ -661,6 +667,87 @@ table.insert(DISASTERS, {
 	end,
 })
 
+table.insert(DISASTERS, {
+	name = "💣 Champ de bombes",
+	tip = "Éloigne-toi des bombes avant qu'elles n'explosent !",
+	run = function(endTime)
+		while running(endTime) do
+			local pos = randomIslandPos() + Vector3.new(0, 2, 0)
+			local victim = randomAlive()
+			local root = victim and rootOf(victim)
+			if root and rng:NextNumber() < 0.5 then
+				pos = root.Position
+			end
+			local bomb = block({
+				Name = "Bombe",
+				Shape = Enum.PartType.Ball,
+				Size = Vector3.new(4, 4, 4),
+				Position = pos,
+				Color = Color3.fromRGB(30, 30, 30),
+				Material = Enum.Material.Metal,
+				CanCollide = false,
+			}, effects)
+			task.delay(1.2, function()
+				if bomb.Parent then
+					bomb.Color = Color3.fromRGB(255, 40, 40)
+					bomb.Material = Enum.Material.Neon
+				end
+			end)
+			task.delay(2.4, function()
+				if bomb.Parent then
+					make("Explosion", {
+						Position = bomb.Position,
+						BlastRadius = 13,
+						BlastPressure = 300000,
+						ExplosionType = Enum.ExplosionType.NoCraters,
+					}, effects)
+					bomb:Destroy()
+				end
+			end)
+			task.wait(0.45)
+		end
+	end,
+})
+
+table.insert(DISASTERS, {
+	name = "🪨 Avalanche de rochers",
+	tip = "Esquive, ou cache-toi derrière une tour !",
+	run = function(endTime)
+		local edge = ISLAND / 2 + 2
+		while running(endTime) do
+			local offset = rng:NextNumber(-ISLAND / 2 + 8, ISLAND / 2 - 8)
+			local side = rng:NextInteger(1, 4)
+			local start, dir
+			if side == 1 then
+				start, dir = Vector3.new(-edge, 9, offset), Vector3.new(1, 0, 0)
+			elseif side == 2 then
+				start, dir = Vector3.new(edge, 9, offset), Vector3.new(-1, 0, 0)
+			elseif side == 3 then
+				start, dir = Vector3.new(offset, 9, -edge), Vector3.new(0, 0, 1)
+			else
+				start, dir = Vector3.new(offset, 9, edge), Vector3.new(0, 0, -1)
+			end
+			local rock = Instance.new("Part")
+			rock.Name = "Rocher"
+			rock.Shape = Enum.PartType.Ball
+			rock.Size = Vector3.new(10, 10, 10)
+			rock.Color = Color3.fromRGB(110, 105, 100)
+			rock.Material = Enum.Material.Slate
+			rock.Position = start
+			rock.Parent = effects
+			rock.AssemblyLinearVelocity = dir * 70
+			rock.Touched:Connect(function(hit)
+				local hum = hit.Parent and hit.Parent:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then
+					hum.Health = 0
+				end
+			end)
+			Debris:AddItem(rock, 6)
+			task.wait(0.7)
+		end
+	end,
+})
+
 ---------------------------------------------------------------- boucle principale
 local function startRound()
 	alive = {}
@@ -738,6 +825,24 @@ task.spawn(function()
 end)
 
 ---------------------------------------------------------------- joueurs
+-- récompense quotidienne : série de 7 jours, à réclamer toutes les 20 h
+local function giveDaily(player)
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+	local now = os.time()
+	local last = profile.daily or 0
+	if now - last < 20 * 3600 then
+		return
+	end
+	profile.streak = now - last < 48 * 3600 and math.min((profile.streak or 0) + 1, 7) or 1
+	profile.daily = now
+	local amount = math.floor(20) * profile.streak
+	profile.coins.Value += amount
+	notify(player, "🎁 Récompense du jour " .. profile.streak .. "/7 : +" .. tostring(amount) .. " — reviens demain !")
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local profile = {
@@ -759,6 +864,8 @@ local function onPlayer(player)
 				profile.wins.Value = tonumber(data.wins) or 0
 				profile.speed = math.clamp(tonumber(data.speed) or 0, 0, MAX_LEVEL)
 				profile.jump = math.clamp(tonumber(data.jump) or 0, 0, MAX_LEVEL)
+				profile.daily = tonumber(data.daily) or 0
+				profile.streak = tonumber(data.streak) or 0
 			end
 		end
 	end
@@ -767,6 +874,17 @@ local function onPlayer(player)
 	end
 	profiles[player] = profile
 	task.spawn(loadPasses, player)
+	task.delay(4, giveDaily, player)
+	local rank = make("StringValue", { Name = "Rang" }, ls)
+	local function updateRank()
+		for _, entry in ipairs(RANKS) do
+			if profile.wins.Value >= entry[1] then
+				rank.Value = entry[2]
+			end
+		end
+	end
+	profile.wins.Changed:Connect(updateRank)
+	updateRank()
 	createHud(player)
 
 	player.CharacterAdded:Connect(function(char)

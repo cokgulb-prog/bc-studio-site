@@ -11,35 +11,55 @@ local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 
 ---------------------------------------------------------------- réglages
-local WEIGHTS = {
-	{ name = "Haltère en bois", power = 1, price = 0 },
-	{ name = "Haltère en fonte", power = 3, price = 100 },
-	{ name = "Haltère en acier", power = 8, price = 600 },
-	{ name = "Haltère en titane", power = 20, price = 3000 },
-	{ name = "Haltère en or", power = 60, price = 15000 },
-	{ name = "Haltère en diamant", power = 180, price = 80000 },
-	{ name = "Haltère plasma", power = 600, price = 450000 },
-	{ name = "Haltère cosmique", power = 2500, price = 3000000 },
-}
+local WEIGHTS = {} -- 40 haltères générés : puissance ×2,4 et prix ×3,2 à chaque palier
+do
+	local MATERIALS = { "bois", "fonte", "acier", "titane", "or", "diamant", "plasma", "cosmique", "néant", "divin" }
+	local GRADES = { "I", "II", "III", "IV" }
+	for k = 1, #MATERIALS * #GRADES do
+		WEIGHTS[k] = {
+			name = "Haltère en " .. MATERIALS[math.ceil(k / #GRADES)] .. " " .. GRADES[(k - 1) % #GRADES + 1],
+			power = math.floor(2.4 ^ (k - 1) + 0.5),
+			price = k == 1 and 0 or math.floor(100 * 3.2 ^ (k - 2)),
+		}
+	end
+end
 
 local PETS = { -- chance = poids du tirage
 	{ name = "Chaton", mult = 1.2, chance = 50, color = Color3.fromRGB(255, 190, 120) },
 	{ name = "Chiot", mult = 1.5, chance = 30, color = Color3.fromRGB(180, 130, 90) },
 	{ name = "Renard", mult = 2, chance = 13, color = Color3.fromRGB(255, 120, 40) },
 	{ name = "Dragonnet", mult = 3.5, chance = 5, color = Color3.fromRGB(80, 220, 120) },
-	{ name = "Phénix", mult = 6, chance = 1.7, color = Color3.fromRGB(255, 70, 70) },
-	{ name = "Licorne cosmique", mult = 12, chance = 0.3, color = Color3.fromRGB(200, 120, 255) },
+	{ name = "Phénix", mult = 6, chance = 1.5, color = Color3.fromRGB(255, 70, 70) },
+	{ name = "Licorne cosmique", mult = 12, chance = 0.4, color = Color3.fromRGB(200, 120, 255) },
+	{ name = "Golem de cristal", mult = 25, chance = 0.08, color = Color3.fromRGB(120, 255, 255) },
+	{ name = "Hydre du néant", mult = 60, chance = 0.015, color = Color3.fromRGB(90, 40, 160) },
+	{ name = "Titan solaire", mult = 150, chance = 0.004, color = Color3.fromRGB(255, 220, 60) },
+	{ name = "Dieu des haltères", mult = 500, chance = 0.001, color = Color3.fromRGB(255, 255, 255) },
 }
 
-local ZONES = { -- zones d'entraînement bonus (renaissances requises)
-	{ name = "Zone Bronze ×3", mult = 3, rebirths = 1, pos = Vector3.new(0, 0, -100), color = Color3.fromRGB(205, 127, 50) },
-	{ name = "Zone Argent ×10", mult = 10, rebirths = 3, pos = Vector3.new(100, 0, 0), color = Color3.fromRGB(200, 200, 215) },
-	{ name = "Zone Or ×40", mult = 40, rebirths = 8, pos = Vector3.new(0, 0, 100), color = Color3.fromRGB(255, 215, 0) },
-}
+local ZONES = {} -- zones d'entraînement bonus, en cercle autour du centre
+do
+	-- nom, multiplicateur, renaissances requises
+	local DEFS = {
+		{ "Bronze", 3, 1 }, { "Argent", 10, 3 }, { "Or", 40, 8 }, { "Platine", 150, 15 },
+		{ "Rubis", 600, 25 }, { "Saphir", 2500, 40 }, { "Néant", 10000, 60 }, { "Divine", 50000, 100 },
+	}
+	for i, def in ipairs(DEFS) do
+		local angle = (i - 1) / #DEFS * math.pi * 2
+		ZONES[i] = {
+			name = "Zone " .. def[1] .. " ×" .. def[2],
+			mult = def[2],
+			rebirths = def[3],
+			pos = Vector3.new(math.cos(angle) * 140, 0, math.sin(angle) * 140),
+			color = Color3.fromHSV((i - 1) / #DEFS, 0.6, 1),
+		}
+	end
+end
 local ZONE_SIZE = 44
 
 local EGG_BASE_PRICE = 500
 local REBIRTH_BASE_PRICE = 50000
+local ASCENSION_STEP = 25 -- renaissances nécessaires par ascension (25, 50, 75…)
 local CLICK_COOLDOWN = 0.08
 
 ---------------------------------------------------------------- outils
@@ -83,8 +103,11 @@ local function label(part, text, height)
 	}, bb)
 end
 
-local SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi" }
+local SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc", "Ud", "Dd", "Td", "Qad" }
 local function fmt(n)
+	if n >= 1e48 then
+		return string.format("%.2e", n)
+	end
 	local i = 1
 	while n >= 1000 and i < #SUFFIX do
 		n = n / 1000
@@ -102,7 +125,7 @@ local function createHud(player)
 	gui.ResetOnSpawn = false
 	local info = make("TextLabel", {
 		Name = "Info",
-		Size = UDim2.new(0, 290, 0, 130),
+		Size = UDim2.new(0, 290, 0, 150),
 		Position = UDim2.new(0, 12, 0.5, -65),
 		BackgroundColor3 = Color3.fromRGB(20, 20, 30),
 		BackgroundTransparency = 0.25,
@@ -232,7 +255,7 @@ local petParts = {} -- [player] = Part
 
 local function multiplier(profile)
 	local petMult = profile.pet > 0 and PETS[profile.pet].mult or 1
-	return petMult * (1 + 0.5 * profile.rebirths.Value)
+	return petMult * (1 + 0.5 * profile.rebirths.Value) * 5 ^ profile.asc
 end
 
 local function rebirthPrice(profile)
@@ -251,13 +274,14 @@ local function refreshHud(player)
 	end
 	local petName = profile.pet > 0 and PETS[profile.pet].name or "aucun"
 	gui.Info.Text = string.format(
-		"💪 Énergie : %s\n🪙 Pièces : %s\n✖ Multiplicateur : ×%.1f\n🏋 %s\n🐾 Familier : %s\n⭐ Renaissance : %s 🪙",
+		"💪 Énergie : %s\n🪙 Pièces : %s\n✖ Multiplicateur : ×%.1f\n🏋 %s\n🐾 Familier : %s\n⭐ Renaissance : %s 🪙\n🌌 Ascensions : %d",
 		fmt(profile.energy.Value),
 		fmt(profile.coins.Value),
 		multiplier(profile),
 		WEIGHTS[profile.tier].name,
 		petName,
-		fmt(rebirthPrice(profile))
+		fmt(rebirthPrice(profile)),
+		profile.asc
 	)
 end
 
@@ -294,7 +318,7 @@ local function applyScale(player)
 	local char = player.Character
 	if profile and char then
 		pcall(function()
-			char:ScaleTo(1 + (profile.tier - 1) * 0.06)
+			char:ScaleTo(math.min(2.5, 1 + (profile.tier - 1) * 0.06))
 		end)
 	end
 end
@@ -375,6 +399,9 @@ local function save(player)
 			rebirths = profile.rebirths.Value,
 			tier = profile.tier,
 			pet = profile.pet,
+			asc = profile.asc,
+			daily = profile.daily,
+			streak = profile.streak,
 		})
 	end)
 end
@@ -416,14 +443,44 @@ MarketplaceService.ProcessReceipt = function(receipt)
 	return Enum.ProductPurchaseDecision.NotProcessedYet
 end
 
+-- récompense quotidienne : série de 7 jours, à réclamer toutes les 20 h
+local function giveDaily(player)
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+	local now = os.time()
+	local last = profile.daily or 0
+	if now - last < 20 * 3600 then
+		return
+	end
+	profile.streak = now - last < 48 * 3600 and math.min((profile.streak or 0) + 1, 7) or 1
+	profile.daily = now
+	local amount = math.floor(rebirthPrice(profile) * 0.02) * profile.streak
+	profile.coins.Value += amount
+	notify(player, "🎁 Récompense du jour " .. profile.streak .. "/7 : +" .. fmt(amount) .. " — reviens demain !")
+end
+
+-- grande valeur : NumberValue cachée (pas de limite) + affichage abrégé dans le classement
+local function bigStat(player, ls, name)
+	local stats = player:FindFirstChild("Stats") or make("Folder", { Name = "Stats" }, player)
+	local value = make("NumberValue", { Name = name }, stats)
+	local shown = make("StringValue", { Name = name, Value = "0" }, ls)
+	value.Changed:Connect(function()
+		shown.Value = fmt(value.Value)
+	end)
+	return value
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local profile = {
-		energy = make("IntValue", { Name = "Énergie" }, ls),
-		coins = make("IntValue", { Name = "Pièces" }, ls),
+		energy = bigStat(player, ls, "Énergie"),
+		coins = bigStat(player, ls, "Pièces"),
 		rebirths = make("IntValue", { Name = "Renaissances" }, ls),
 		tier = 1,
 		pet = 0,
+		asc = 0,
 		loaded = false,
 		lastClick = 0,
 		lastWarn = 0,
@@ -441,6 +498,9 @@ local function onPlayer(player)
 				profile.rebirths.Value = tonumber(data.rebirths) or 0
 				profile.tier = math.clamp(tonumber(data.tier) or 1, 1, #WEIGHTS)
 				profile.pet = math.clamp(tonumber(data.pet) or 0, 0, #PETS)
+				profile.asc = tonumber(data.asc) or 0
+				profile.daily = tonumber(data.daily) or 0
+				profile.streak = tonumber(data.streak) or 0
 			end
 		end
 	end
@@ -449,6 +509,7 @@ local function onPlayer(player)
 	end
 	profiles[player] = profile
 	task.spawn(loadPasses, player)
+	task.delay(4, giveDaily, player)
 
 	createHud(player)
 	for _, value in ipairs({ profile.energy, profile.coins, profile.rebirths }) do
@@ -558,7 +619,7 @@ station("🏋 Boutique d'haltères", Vector3.new(30, 0, -30), Color3.fromRGB(70,
 		profile.coins.Value -= nextWeight.price
 		profile.tier += 1
 		applyScale(player)
-		notify(player, "Nouvel équipement : " .. nextWeight.name .. " (+" .. nextWeight.power .. " par clic)")
+		notify(player, "Nouvel équipement : " .. nextWeight.name .. " (+" .. fmt(nextWeight.power) .. " par clic)")
 	end
 end)
 
@@ -618,6 +679,22 @@ RunService.Heartbeat:Connect(function()
 			part.CFrame = part.CFrame:Lerp(target, 0.15)
 		end
 	end
+end)
+
+-- deuxième prestige : l'ascension remet les renaissances à zéro contre un gain ×5 permanent
+station("🌌 Ascension", Vector3.new(0, 0, -55), Color3.fromRGB(150, 90, 255), "Ascensionner", function(player, profile)
+	local needed = ASCENSION_STEP * (profile.asc + 1)
+	if profile.rebirths.Value < needed then
+		notify(player, "Ascension : " .. needed .. " renaissances nécessaires (gains ×5 permanents)")
+		return
+	end
+	profile.rebirths.Value = 0
+	profile.coins.Value = 0
+	profile.energy.Value = 0
+	profile.tier = 1
+	profile.asc += 1
+	applyScale(player)
+	notify(player, "🌌 Ascension n°" .. profile.asc .. " ! Tous tes gains sont multipliés par 5")
 end)
 
 -- boutique Robux

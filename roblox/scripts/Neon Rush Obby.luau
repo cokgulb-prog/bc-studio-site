@@ -1,0 +1,528 @@
+--[[
+	NÉON RUSH OBBY — parcours d'obstacles généré automatiquement
+	À placer dans ServerScriptService (un seul Script, rien d'autre à construire).
+	200 étapes, checkpoints sauvegardés, difficulté progressive, compteur de victoires.
+]]
+
+local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+
+---------------------------------------------------------------- réglages
+local STAGES = 200 -- nombre d'étapes
+local STEP = 70 -- distance entre deux checkpoints
+local Y = 10 -- hauteur du parcours
+local SEED = 2026 -- change ce nombre pour générer un autre parcours
+
+---------------------------------------------------------------- outils
+local function make(class, props, parent)
+	local inst = Instance.new(class)
+	for k, v in pairs(props) do
+		inst[k] = v
+	end
+	inst.Parent = parent
+	return inst
+end
+
+local world = make("Folder", { Name = "Parcours" }, workspace)
+
+local function block(props)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in pairs(props) do
+		p[k] = v
+	end
+	p.Parent = world
+	return p
+end
+
+local function label(part, text, height)
+	local bb = make("BillboardGui", {
+		Size = UDim2.new(0, 220, 0, 60),
+		StudsOffset = Vector3.new(0, height or 4, 0),
+		MaxDistance = 120,
+	}, part)
+	return make("TextLabel", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBlack,
+		TextScaled = true,
+	}, bb)
+end
+
+local function createHud(player)
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "HUD"
+	gui.ResetOnSpawn = false
+	make("TextLabel", {
+		Name = "Notif",
+		Size = UDim2.new(0.7, 0, 0, 48),
+		Position = UDim2.new(0.15, 0, 0.14, 0),
+		BackgroundTransparency = 1,
+		TextColor3 = Color3.fromRGB(255, 230, 90),
+		TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBlack,
+		TextSize = 28,
+		Text = "",
+	}, gui)
+	local playerGui = player:WaitForChild("PlayerGui", 10)
+	if playerGui then
+		gui.Parent = playerGui
+	end
+end
+
+local function notify(player, text)
+	local playerGui = player:FindFirstChild("PlayerGui")
+	local gui = playerGui and playerGui:FindFirstChild("HUD")
+	if not gui then
+		return
+	end
+	local stamp = os.clock()
+	gui.Notif.Text = text
+	gui.Notif:SetAttribute("Stamp", stamp)
+	task.delay(4, function()
+		if gui.Parent and gui.Notif:GetAttribute("Stamp") == stamp then
+			gui.Notif.Text = ""
+		end
+	end)
+end
+
+local function killOnTouch(part)
+	part.Touched:Connect(function(hit)
+		local hum = hit.Parent and hit.Parent:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			hum.Health = 0
+		end
+	end)
+end
+
+---------------------------------------------------------------- contenu payant (Robux)
+-- 1. Publie le jeu, puis crée les passes et les produits sur create.roblox.com
+--    (ton expérience -> Monétisation -> Passes / Produits développeur).
+-- 2. Colle leurs ID ci-dessous. Tant qu'un ID vaut 0, l'achat est désactivé.
+local PASS_IDS = {
+	speed = 0, -- passe « Vitesse turbo » (course plus rapide)
+}
+local PRODUCT_IDS = {
+	skip = 0, -- produit « Passer l'étape »
+}
+local passes = {} -- [player] = { clé = true }
+
+local function hasPass(player, key)
+	return passes[player] ~= nil and passes[player][key] == true
+end
+
+local function loadPasses(player)
+	local owned = {}
+	passes[player] = owned
+	for key, id in pairs(PASS_IDS) do
+		if id > 0 then
+			local ok, owns = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id)
+			end)
+			if ok and owns then
+				owned[key] = true
+			end
+		end
+	end
+end
+
+local function offer(player, kind, key)
+	local id = (kind == "pass" and PASS_IDS or PRODUCT_IDS)[key]
+	if not id or id == 0 then
+		notify(player, "🛒 Bientôt disponible !")
+	elseif kind == "pass" then
+		if hasPass(player, key) then
+			notify(player, "Tu possèdes déjà ce passe")
+		else
+			MarketplaceService:PromptGamePassPurchase(player, id)
+		end
+	else
+		MarketplaceService:PromptProductPurchase(player, id)
+	end
+end
+
+local function robuxStand(name, pos, kind, key)
+	local stand = block({
+		Name = name,
+		Size = Vector3.new(4, 4, 4),
+		Position = pos + Vector3.new(0, 2, 0),
+		Color = Color3.fromRGB(0, 200, 120),
+		Material = Enum.Material.Neon,
+	})
+	label(stand, name, 5)
+	local prompt = make("ProximityPrompt", {
+		ObjectText = name,
+		ActionText = "Acheter (Robux)",
+		HoldDuration = 0.3,
+		MaxActivationDistance = 10,
+		RequiresLineOfSight = false,
+	}, stand)
+	prompt.Triggered:Connect(function(player)
+		offer(player, kind, key)
+	end)
+	return stand
+end
+
+---------------------------------------------------------------- décor
+for _, obj in ipairs(workspace:GetChildren()) do
+	if obj:IsA("SpawnLocation") or obj.Name == "Baseplate" then
+		obj:Destroy()
+	end
+end
+workspace.FallenPartsDestroyHeight = -60
+Lighting.ClockTime = 0
+Lighting.Brightness = 1
+Lighting.Ambient = Color3.fromRGB(110, 110, 140)
+Lighting.OutdoorAmbient = Color3.fromRGB(110, 110, 140)
+
+---------------------------------------------------------------- génération
+local rng = Random.new(SEED)
+local checkpoints = {} -- [0..STAGES] = Part
+local spinners = {}
+local blinkers = {}
+local LAVA = Color3.fromRGB(255, 50, 50)
+
+local function lavaPart(props)
+	props.Color = LAVA
+	props.Material = Enum.Material.Neon
+	local p = block(props)
+	killOnTouch(p)
+	return p
+end
+
+-- plateformes à sauter (clignotantes si blink = true)
+local function buildJumps(z0, span, d, color, blink)
+	local size = 5 - d
+	local targetGap = blink and (3.5 + 1.5 * d) or (3.5 + 2.5 * d)
+	local n = math.ceil((span - targetGap) / (size + targetGap))
+	local gap = (span - n * size) / (n + 1)
+	for k = 1, n do
+		local z = z0 + gap * k + size * (k - 1) + size / 2
+		local p = block({
+			Size = Vector3.new(size, 1, size),
+			Position = Vector3.new(rng:NextNumber(-1.5, 1.5), Y, z),
+			Color = color,
+			Material = Enum.Material.Neon,
+		})
+		if blink then
+			table.insert(blinkers, { part = p, phase = k * 0.7 })
+		end
+	end
+end
+
+-- sol avec bandes de lave à enjamber
+local function buildLava(z0, span, d, color)
+	block({
+		Size = Vector3.new(10, 1, span),
+		Position = Vector3.new(0, Y, z0 + span / 2),
+		Color = color,
+		Material = Enum.Material.SmoothPlastic,
+	})
+	local len = 2 + 3 * d
+	local count = math.floor(span / (len + 7))
+	for k = 1, count do
+		lavaPart({
+			Size = Vector3.new(10, 0.6, len),
+			Position = Vector3.new(0, Y + 0.6, z0 + span * k / (count + 1)),
+		})
+	end
+end
+
+-- poutre fine en zigzag
+local function buildBeam(z0, span, d, color)
+	local width = 2.2 - 1.2 * d
+	local seg = span / 3
+	local off = (2 + 2 * d) * (rng:NextInteger(0, 1) == 0 and -1 or 1)
+	local offsets = { 0, off, 0 }
+	for k = 1, 3 do
+		block({
+			Size = Vector3.new(width, 1, seg),
+			Position = Vector3.new(offsets[k], Y, z0 + seg * (k - 0.5)),
+			Color = color,
+			Material = Enum.Material.Neon,
+		})
+	end
+end
+
+-- barres rotatives à sauter
+local function buildSpinners(z0, span, d, color)
+	block({
+		Size = Vector3.new(12, 1, span),
+		Position = Vector3.new(0, Y, z0 + span / 2),
+		Color = color,
+		Material = Enum.Material.SmoothPlastic,
+	})
+	local count = 3 + math.floor(2 * d)
+	for k = 1, count do
+		local pos = Vector3.new(0, Y + 1.1, z0 + span * k / (count + 1))
+		local bar = lavaPart({ Size = Vector3.new(11, 1.2, 1), Position = pos })
+		local speed = (1.5 + 2 * d) * (k % 2 == 0 and -1 or 1)
+		table.insert(spinners, { part = bar, base = CFrame.new(pos), speed = speed })
+	end
+end
+
+-- tapis roulant qui repousse vers l'arrière, avec bandes de lave
+local function buildConveyor(z0, span, d, color)
+	local belt = block({
+		Size = Vector3.new(8, 1, span),
+		Position = Vector3.new(0, Y, z0 + span / 2),
+		Color = color,
+		Material = Enum.Material.DiamondPlate,
+	})
+	belt.AssemblyLinearVelocity = Vector3.new(0, 0, -(5 + 6 * d))
+	local count = math.floor(span / 14)
+	for k = 1, count do
+		lavaPart({
+			Size = Vector3.new(8, 0.6, 2),
+			Position = Vector3.new(0, Y + 0.6, z0 + span * k / (count + 1)),
+		})
+	end
+end
+
+for i = 0, STAGES do
+	local z = i * STEP
+	local isEnd = i == STAGES
+	local cp = block({
+		Name = "Checkpoint" .. i,
+		Size = Vector3.new(14, 1, 12),
+		Position = Vector3.new(0, Y, z),
+		Color = isEnd and Color3.fromRGB(255, 215, 0) or Color3.fromRGB(240, 240, 255),
+		Material = Enum.Material.Neon,
+	})
+	checkpoints[i] = cp
+	label(cp, i == 0 and "DÉPART" or (isEnd and "🏆 ARRIVÉE 🏆" or ("Étape " .. i)), 6)
+
+	if i > 0 then
+		local d = (i - 1) / (STAGES - 1) -- difficulté de 0 à 1
+		local kind = i <= 6 and i or rng:NextInteger(1, 6)
+		local color = Color3.fromHSV((i % 25) / 25, 0.75, 1) -- un cycle de couleurs tous les 25 niveaux
+		local z0 = (i - 1) * STEP + 6
+		local span = STEP - 12
+		if kind == 1 then
+			buildJumps(z0, span, d, color, false)
+		elseif kind == 2 then
+			buildLava(z0, span, d, color)
+		elseif kind == 3 then
+			buildBeam(z0, span, d, color)
+		elseif kind == 4 then
+			buildSpinners(z0, span, d, color)
+		elseif kind == 5 then
+			buildJumps(z0, span, d, color, true)
+		else
+			buildConveyor(z0, span, d, color)
+		end
+	end
+end
+
+make("SpawnLocation", {
+	Anchored = true,
+	Size = Vector3.new(6, 1, 6),
+	Position = Vector3.new(0, Y + 0.6, 0),
+	Transparency = 1,
+	CanCollide = false,
+	Neutral = true,
+}, world)
+
+RunService.Heartbeat:Connect(function()
+	local t = os.clock()
+	for _, s in ipairs(spinners) do
+		s.part.CFrame = s.base * CFrame.Angles(0, t * s.speed, 0)
+	end
+end)
+
+task.spawn(function()
+	while true do
+		local now = os.clock()
+		for _, b in ipairs(blinkers) do
+			local t = (now + b.phase) % 4
+			if t < 2 then
+				b.part.Transparency = 0
+				b.part.CanCollide = true
+			elseif t < 2.7 then
+				b.part.Transparency = 0.6 -- avertissement
+				b.part.CanCollide = true
+			else
+				b.part.Transparency = 0.92
+				b.part.CanCollide = false
+			end
+		end
+		task.wait(0.1)
+	end
+end)
+
+---------------------------------------------------------------- joueurs
+local store
+pcall(function()
+	store = DataStoreService:GetDataStore("NeonRushObby_v1")
+end)
+local loaded = {}
+
+local function teleportToStage(player)
+	local char = player.Character
+	local ls = player:FindFirstChild("leaderstats")
+	if not char or not ls then
+		return
+	end
+	local cp = checkpoints[ls["Étape"].Value] or checkpoints[0]
+	char:PivotTo(cp.CFrame + Vector3.new(0, 4, 0))
+end
+
+local function save(player)
+	if not store or not loaded[player] then
+		return
+	end
+	local ls = player:FindFirstChild("leaderstats")
+	if not ls then
+		return
+	end
+	pcall(function()
+		store:SetAsync("u_" .. player.UserId, { stage = ls["Étape"].Value, wins = ls.Victoires.Value })
+	end)
+end
+
+-- achats Robux : passes (permanents) et produits (rachetables)
+local function applySpeed(player)
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if hum and hasPass(player, "speed") then
+		hum.WalkSpeed = 22
+	end
+end
+
+local function grantProduct(player, key)
+	local ls = player:FindFirstChild("leaderstats")
+	if key ~= "skip" or not ls then
+		return false
+	end
+	if ls["Étape"].Value >= STAGES - 1 then
+		ls.Victoires.Value += 1
+		ls["Étape"].Value = 0
+	else
+		ls["Étape"].Value += 1
+	end
+	teleportToStage(player)
+	notify(player, "⏭ Étape passée !")
+	return true
+end
+
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+	if not purchased or not passes[player] then
+		return
+	end
+	for key, id in pairs(PASS_IDS) do
+		if id == passId then
+			passes[player][key] = true
+			notify(player, "✅ Passe activé, merci !")
+			applySpeed(player)
+		end
+	end
+end)
+
+MarketplaceService.ProcessReceipt = function(receipt)
+	local player = Players:GetPlayerByUserId(receipt.PlayerId)
+	if player then
+		for key, id in pairs(PRODUCT_IDS) do
+			if id > 0 and id == receipt.ProductId and grantProduct(player, key) then
+				save(player)
+				return Enum.ProductPurchaseDecision.PurchaseGranted
+			end
+		end
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
+local function onPlayer(player)
+	local ls = make("Folder", { Name = "leaderstats" }, player)
+	local stage = make("IntValue", { Name = "Étape" }, ls)
+	local wins = make("IntValue", { Name = "Victoires" }, ls)
+
+	player.CharacterAdded:Connect(function(char)
+		char:WaitForChild("HumanoidRootPart", 10)
+		task.wait(0.15)
+		teleportToStage(player)
+		applySpeed(player)
+	end)
+
+	task.spawn(createHud, player)
+
+	if store then
+		local ok, data = pcall(function()
+			return store:GetAsync("u_" .. player.UserId)
+		end)
+		if ok then
+			loaded[player] = true
+			if type(data) == "table" then
+				stage.Value = math.clamp(tonumber(data.stage) or 0, 0, STAGES - 1)
+				wins.Value = tonumber(data.wins) or 0
+			end
+		end
+	end
+	loadPasses(player)
+	applySpeed(player)
+	if stage.Value > 0 then
+		teleportToStage(player)
+	end
+end
+
+-- boutique Robux : passer une étape (sur chaque checkpoint) et passe vitesse (au départ)
+for i = 0, STAGES - 1 do
+	local prompt = make("ProximityPrompt", {
+		ObjectText = "Trop dur ?",
+		ActionText = "Passer l'étape (Robux)",
+		HoldDuration = 0.5,
+		MaxActivationDistance = 9,
+		RequiresLineOfSight = false,
+	}, checkpoints[i])
+	prompt.Triggered:Connect(function(player)
+		local ls = player:FindFirstChild("leaderstats")
+		if ls and ls["Étape"].Value == i then
+			offer(player, "product", "skip")
+		end
+	end)
+end
+robuxStand("⚡ Passe Vitesse turbo", Vector3.new(-9, Y + 0.5, -4), "pass", "speed")
+block({ Size = Vector3.new(6, 1, 6), Position = Vector3.new(-9, Y, -4), Color = Color3.fromRGB(240, 240, 255), Material = Enum.Material.Neon })
+
+for i = 1, STAGES do
+	checkpoints[i].Touched:Connect(function(hit)
+		local player = hit.Parent and Players:GetPlayerFromCharacter(hit.Parent)
+		local ls = player and player:FindFirstChild("leaderstats")
+		if not ls or ls["Étape"].Value ~= i - 1 then
+			return
+		end
+		if i == STAGES then
+			ls.Victoires.Value += 1
+			ls["Étape"].Value = 0
+			notify(player, "🏆 Parcours terminé ! Victoires : " .. ls.Victoires.Value)
+			task.wait(2)
+			teleportToStage(player)
+		else
+			ls["Étape"].Value = i
+			notify(player, "✅ Étape " .. i .. " / " .. STAGES)
+		end
+	end)
+end
+
+Players.PlayerAdded:Connect(onPlayer)
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayer, player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	passes[player] = nil
+	save(player)
+	loaded[player] = nil
+end)
+
+game:BindToClose(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		save(player)
+	end
+end)

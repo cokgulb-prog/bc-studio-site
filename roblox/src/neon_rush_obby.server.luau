@@ -1,7 +1,7 @@
 --[[
 	NÉON RUSH OBBY — parcours d'obstacles généré automatiquement
 	À placer dans ServerScriptService (un seul Script, rien d'autre à construire).
-	40 étapes, checkpoints sauvegardés, difficulté progressive, compteur de victoires.
+	200 étapes, checkpoints sauvegardés, difficulté progressive, compteur de victoires.
 ]]
 
 local Players = game:GetService("Players")
@@ -11,7 +11,7 @@ local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 
 ---------------------------------------------------------------- réglages
-local STAGES = 40 -- nombre d'étapes
+local STAGES = 200 -- nombre d'étapes
 local STEP = 70 -- distance entre deux checkpoints
 local Y = 10 -- hauteur du parcours
 local SEED = 2026 -- change ce nombre pour générer un autre parcours
@@ -269,6 +269,24 @@ local function buildSpinners(z0, span, d, color)
 	end
 end
 
+-- tapis roulant qui repousse vers l'arrière, avec bandes de lave
+local function buildConveyor(z0, span, d, color)
+	local belt = block({
+		Size = Vector3.new(8, 1, span),
+		Position = Vector3.new(0, Y, z0 + span / 2),
+		Color = color,
+		Material = Enum.Material.DiamondPlate,
+	})
+	belt.AssemblyLinearVelocity = Vector3.new(0, 0, -(5 + 6 * d))
+	local count = math.floor(span / 14)
+	for k = 1, count do
+		lavaPart({
+			Size = Vector3.new(8, 0.6, 2),
+			Position = Vector3.new(0, Y + 0.6, z0 + span * k / (count + 1)),
+		})
+	end
+end
+
 for i = 0, STAGES do
 	local z = i * STEP
 	local isEnd = i == STAGES
@@ -284,8 +302,8 @@ for i = 0, STAGES do
 
 	if i > 0 then
 		local d = (i - 1) / (STAGES - 1) -- difficulté de 0 à 1
-		local kind = i <= 5 and i or rng:NextInteger(1, 5)
-		local color = Color3.fromHSV((i / STAGES) % 1, 0.75, 1)
+		local kind = i <= 6 and i or rng:NextInteger(1, 6)
+		local color = Color3.fromHSV((i % 25) / 25, 0.75, 1) -- un cycle de couleurs tous les 25 niveaux
 		local z0 = (i - 1) * STEP + 6
 		local span = STEP - 12
 		if kind == 1 then
@@ -296,8 +314,10 @@ for i = 0, STAGES do
 			buildBeam(z0, span, d, color)
 		elseif kind == 4 then
 			buildSpinners(z0, span, d, color)
-		else
+		elseif kind == 5 then
 			buildJumps(z0, span, d, color, true)
+		else
+			buildConveyor(z0, span, d, color)
 		end
 	end
 end

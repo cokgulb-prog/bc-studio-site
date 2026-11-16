@@ -1,16 +1,29 @@
 # Jeux Roblox
 
-Cinq jeux originaux dans les genres qui marchent le mieux sur Roblox. Chaque jeu
+Huit jeux originaux dans les genres qui marchent le mieux sur Roblox. Chaque jeu
 tient dans **un seul Script** : il construit toute la carte lui-même au lancement,
 il n'y a rien à modéliser dans Studio.
 
-| Jeu | Genre | Fichier Studio | Code |
-| --- | --- | --- | --- |
-| Néon Rush Obby | Obby (parcours) — 40 étapes, checkpoints, victoires | `places/Neon Rush Obby.rbxlx` | `src/neon_rush_obby.server.luau` |
-| Force Légendaire | Simulateur de clics — haltères, familiers, renaissances, zones | `places/Force Legendaire Simulator.rbxlx` | `src/force_legendaire_simulator.server.luau` |
-| Usine à Bonbons Tycoon | Tycoon — machines, tapis roulant, améliorations, renaissance | `places/Usine a Bonbons Tycoon.rbxlx` | `src/usine_a_bonbons_tycoon.server.luau` |
-| Catastrophes en Folie | Survie par manches — lave, météores, pluie acide, tornade, sol électrique | `places/Catastrophes en Folie.rbxlx` | `src/catastrophes_en_folie.server.luau` |
-| Jardin Enchanté | Jardinage — pousse hors ligne, mutations, pluie | `places/Jardin Enchante.rbxlx` | `src/jardin_enchante.server.luau` |
+| Jeu | Genre | Ce qui le fait durer |
+| --- | --- | --- |
+| Néon Rush Obby | Parcours | 200 étapes, 6 types d'obstacles, difficulté progressive |
+| Force Légendaire | Simulateur de clics | 40 haltères, 10 familiers, 8 zones, renaissances sans limite, ascensions |
+| Usine à Bonbons Tycoon | Tycoon | renaissances sans limite : revenus ×2 mais prix ×2,5 à chaque fois |
+| Catastrophes en Folie | Survie par manches | 7 catastrophes, 2 améliorations à 20 niveaux, 7 rangs jusqu'à 1 500 victoires |
+| Jardin Enchanté | Jardinage | 16 graines débloquées par niveau, pousse hors ligne, mutations |
+| Mine des Profondeurs | Minage | 300 couches, 11 minerais, 30 pioches, 20 sacs, renaissances |
+| Lames & Légendes | Combat | 20 zones avec boss, 50 épées, niveaux, renaissances |
+| Pêche Paradis | Pêche et collection | 6 étangs, 36 espèces (mythiques à 1/1000), 25 cannes, prestiges |
+
+Tous les jeux sauf l'obby ont une **récompense quotidienne** (série de 7 jours) pour
+faire revenir les joueurs.
+
+## Dossiers
+
+- `places/` : un fichier `.rbxlx` par jeu, à ouvrir dans Roblox Studio.
+- `scripts/` : le script complet de chaque jeu, à copier-coller si besoin.
+- `src/` : les sources. Les trois derniers jeux (`.game.luau`) partagent le socle
+  `_base.luau`, ajouté automatiquement par `build.py`.
 
 ## Lancer un jeu
 
@@ -19,7 +32,7 @@ il n'y a rien à modéliser dans Studio.
 2. Appuie sur **Jouer** (F5).
 
 Si le fichier ne s'ouvre pas : crée une place vide (modèle *Baseplate*), ajoute un
-`Script` dans `ServerScriptService` et colle dedans le contenu du fichier `.luau`.
+`Script` dans `ServerScriptService` et colle dedans le fichier du dossier `scripts/`.
 
 ## Publier
 
@@ -41,6 +54,9 @@ tant que les ID valent 0.
 | Usine à Bonbons Tycoon | Revenus ×2 | Valise d'argent |
 | Catastrophes en Folie | VIP (pièces ×2) | 100 pièces |
 | Jardin Enchanté | Engrais magique (pousse ×2) | Bourse de pièces |
+| Mine des Profondeurs | Minerais ×2, Sac sans fond | Coffre de pièces |
+| Lames & Légendes | Dégâts ×2, Attaque automatique | Bourse d'or |
+| Pêche Paradis | Chance ×2, Pêche automatique | Trésor englouti |
 
 Pour les activer :
 
@@ -53,16 +69,17 @@ Pour les activer :
 
 - Les œufs du simulateur s'achètent avec des pièces, elles-mêmes achetables en
   Robux : c'est un tirage au sort payant au sens des règles Roblox, d'où
-  l'affichage des chances sur le stand. Ne retire pas cet affichage.
+  l'affichage des chances sur le stand. Même logique pour la pêche (panneau des
+  chances à côté de chaque étang). Ne retire pas ces affichages.
 - Convertir les Robux gagnés en argent réel (DevEx) est soumis aux conditions de
   Roblox (âge, seuil minimal de Robux gagnés, vérification d'identité) : vérifie
   les conditions en vigueur avant de compter dessus.
 
 ## Modifier
 
-Les réglages (prix, nombre d'étapes, durées…) sont regroupés en haut de chaque
-script, dans la section « réglages ». Après modification d'un `.luau`, régénère les
-fichiers Studio :
+Les réglages (prix, nombre d'étapes, durées, courbes de progression…) sont
+regroupés en haut de chaque source, dans la section « réglages ». Après
+modification d'un fichier de `src/`, régénère `places/` et `scripts/` :
 
 ```
 python3 roblox/build.py
@@ -70,5 +87,8 @@ python3 roblox/build.py
 
 ## État
 
-Le code a été relu et sa structure vérifiée, mais il n'a **pas encore été lancé
-dans Roblox Studio** : prévois une session de test de chaque jeu avant de publier.
+- Le code a été relu et sa structure vérifiée, mais il n'a **pas encore été lancé
+  dans Roblox Studio** : prévois une session de test de chaque jeu avant de publier.
+- La durée de vie repose sur des courbes de prix exponentielles et des prestiges
+  sans plafond. Elle n'a pas été mesurée en jeu : l'équilibrage (trop lent, trop
+  rapide) se règle en jouant, avec les nombres de la section « réglages ».

@@ -11,7 +11,8 @@
 	USINE À BONBONS TYCOON — tycoon classique (machines, tapis roulant, améliorations)
 	À placer dans ServerScriptService (un seul Script, rien d'autre à construire).
 	6 usines autour d'une place centrale. Le joueur réclame une usine, achète les
-	machines une par une, encaisse l'argent et peut renaître pour doubler ses revenus.
+	machines une par une, encaisse l'argent et peut renaître : revenus ×2 mais prix ×2,5 à chaque fois,
+	ce qui rend chaque nouvelle partie plus longue que la précédente.
 	Conseil : règle le nombre maximum de joueurs du serveur sur 6.
 ]]
 
@@ -87,8 +88,11 @@ local function label(part, text, height)
 	}, bb)
 end
 
-local SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi" }
+local SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc", "Ud", "Dd", "Td", "Qad" }
 local function fmt(n)
+	if n >= 1e48 then
+		return string.format("%.2e", n)
+	end
 	local i = 1
 	while n >= 1000 and i < #SUFFIX do
 		n = n / 1000
@@ -224,8 +228,15 @@ local function save(player)
 			cash = profile.cash.Value,
 			rebirths = profile.rebirths.Value,
 			idx = profile.idx,
+			daily = profile.daily,
+			streak = profile.streak,
 		})
 	end)
+end
+
+-- à chaque renaissance les prix sont multipliés par 2,5 (et les revenus par 2)
+local function scaled(profile, price)
+	return math.floor(price * 2.5 ^ profile.rebirths.Value)
 end
 
 -- achats Robux : passes (permanents) et produits (rachetables)
@@ -235,7 +246,7 @@ local function grantProduct(player, key)
 		return false
 	end
 	local nextItem = ITEMS[profile.idx + 1]
-	local amount = math.max(2500, math.floor((nextItem and nextItem.price or REBIRTH_PRICE) * 0.5))
+	local amount = math.max(2500, math.floor(scaled(profile, nextItem and nextItem.price or REBIRTH_PRICE) * 0.5))
 	profile.cash.Value += amount
 	notify(player, "💎 +" .. fmt(amount) .. " $")
 	return true
@@ -291,10 +302,10 @@ local function refreshButton(plot)
 	local item = ITEMS[profile.idx + 1]
 	if item then
 		plot.button.Color = Color3.fromRGB(60, 220, 100)
-		plot.buttonLabel.Text = item.name .. "\n" .. (item.price == 0 and "GRATUIT" or (fmt(item.price) .. " $"))
+		plot.buttonLabel.Text = item.name .. "\n" .. (item.price == 0 and "GRATUIT" or (fmt(scaled(profile, item.price)) .. " $"))
 	else
 		plot.button.Color = Color3.fromRGB(255, 215, 0)
-		plot.buttonLabel.Text = "⭐ RENAISSANCE (revenus +100 %)\n" .. fmt(REBIRTH_PRICE) .. " $"
+		plot.buttonLabel.Text = "⭐ RENAISSANCE (revenus ×2)\n" .. fmt(scaled(profile, REBIRTH_PRICE)) .. " $"
 	end
 end
 
@@ -402,7 +413,7 @@ local function onButton(plot, player)
 	end)
 
 	local item = ITEMS[profile.idx + 1]
-	local price = item and item.price or REBIRTH_PRICE
+	local price = scaled(profile, item and item.price or REBIRTH_PRICE)
 	if profile.cash.Value < price then
 		notify(player, "Il te manque " .. fmt(price - profile.cash.Value) .. " $")
 		return
@@ -450,7 +461,7 @@ local function buildPlot(index)
 	collector.Touched:Connect(function(hit)
 		if hit.Name == "Bonbon" and hit.Parent == plot.drops then
 			local profile = plot.owner and profiles[plot.owner]
-			local mult = profile and (1 + profile.rebirths.Value) or 1
+			local mult = profile and 2 ^ profile.rebirths.Value or 1
 			if plot.owner and hasPass(plot.owner, "double") then
 				mult *= 2
 			end
@@ -554,10 +565,39 @@ task.spawn(function()
 end)
 
 ---------------------------------------------------------------- joueurs
+-- récompense quotidienne : série de 7 jours, à réclamer toutes les 20 h
+local function giveDaily(player)
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+	local now = os.time()
+	local last = profile.daily or 0
+	if now - last < 20 * 3600 then
+		return
+	end
+	profile.streak = now - last < 48 * 3600 and math.min((profile.streak or 0) + 1, 7) or 1
+	profile.daily = now
+	local amount = math.floor(math.max(500, scaled(profile, (ITEMS[profile.idx + 1] or { price = REBIRTH_PRICE }).price) * 0.05)) * profile.streak
+	profile.cash.Value += amount
+	notify(player, "🎁 Récompense du jour " .. profile.streak .. "/7 : +" .. fmt(amount) .. " — reviens demain !")
+end
+
+-- grande valeur : NumberValue cachée (pas de limite) + affichage abrégé dans le classement
+local function bigStat(player, ls, name)
+	local stats = player:FindFirstChild("Stats") or make("Folder", { Name = "Stats" }, player)
+	local value = make("NumberValue", { Name = name }, stats)
+	local shown = make("StringValue", { Name = name, Value = "0" }, ls)
+	value.Changed:Connect(function()
+		shown.Value = fmt(value.Value)
+	end)
+	return value
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local profile = {
-		cash = make("IntValue", { Name = "Argent" }, ls),
+		cash = bigStat(player, ls, "Argent"),
 		rebirths = make("IntValue", { Name = "Renaissances" }, ls),
 		idx = 0,
 		loaded = false,
@@ -574,6 +614,8 @@ local function onPlayer(player)
 				profile.cash.Value = tonumber(data.cash) or 0
 				profile.rebirths.Value = tonumber(data.rebirths) or 0
 				profile.idx = math.clamp(tonumber(data.idx) or 0, 0, #ITEMS)
+				profile.daily = tonumber(data.daily) or 0
+				profile.streak = tonumber(data.streak) or 0
 			end
 		end
 	end
@@ -582,6 +624,7 @@ local function onPlayer(player)
 	end
 	profiles[player] = profile
 	task.spawn(loadPasses, player)
+	task.delay(4, giveDaily, player)
 	createHud(player)
 	notify(player, "Touche la porte verte d'une usine libre pour commencer !")
 end

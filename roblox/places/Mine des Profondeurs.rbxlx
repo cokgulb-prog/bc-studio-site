@@ -1,0 +1,780 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Item class="ServerScriptService" referent="RBX0">
+		<Properties>
+			<string name="Name">ServerScriptService</string>
+		</Properties>
+		<Item class="Script" referent="RBX1">
+			<Properties>
+				<string name="Name">Jeu</string>
+				<bool name="Disabled">false</bool>
+				<ProtectedString name="Source"><![CDATA[--[[
+	SOCLE COMMUN — ajouté automatiquement par build.py au début des jeux qui en ont besoin
+	(mine, combat, pêche). Il fournit : outils de construction, interface, sauvegarde,
+	récompense quotidienne et boutique Robux. Le jeu remplit ensuite la table `Game`.
+]]
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+---------------------------------------------------------------- outils
+local function make(class, props, parent)
+	local inst = Instance.new(class)
+	for k, v in pairs(props) do
+		inst[k] = v
+	end
+	inst.Parent = parent
+	return inst
+end
+
+for _, obj in ipairs(workspace:GetChildren()) do
+	if obj:IsA("SpawnLocation") or obj.Name == "Baseplate" then
+		obj:Destroy()
+	end
+end
+
+local world = make("Folder", { Name = "Monde" }, workspace)
+
+local function block(props, parent)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in pairs(props) do
+		p[k] = v
+	end
+	p.Parent = parent or world
+	return p
+end
+
+local function label(part, text, height)
+	local bb = make("BillboardGui", {
+		Size = UDim2.new(0, 280, 0, 80),
+		StudsOffset = Vector3.new(0, height or 4, 0),
+		MaxDistance = 120,
+	}, part)
+	return make("TextLabel", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBlack,
+		TextScaled = true,
+	}, bb)
+end
+
+local SUFFIX = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc", "Ud", "Dd", "Td", "Qad" }
+local function fmt(n)
+	if n >= 1e48 then
+		return string.format("%.2e", n)
+	end
+	local i = 1
+	while n >= 1000 and i < #SUFFIX do
+		n = n / 1000
+		i += 1
+	end
+	if i == 1 then
+		return tostring(math.floor(n))
+	end
+	return string.format("%.2f%s", n, SUFFIX[i])
+end
+
+local function createHud(player)
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "HUD"
+	gui.ResetOnSpawn = false
+	local info = make("TextLabel", {
+		Name = "Info",
+		Size = UDim2.new(0, 300, 0, 160),
+		Position = UDim2.new(0, 12, 0.5, -80),
+		BackgroundColor3 = Color3.fromRGB(20, 20, 30),
+		BackgroundTransparency = 0.25,
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamBold,
+		TextSize = 17,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextWrapped = true,
+		Text = "",
+	}, gui)
+	make("UICorner", { CornerRadius = UDim.new(0, 10) }, info)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 10) }, info)
+	make("TextLabel", {
+		Name = "Notif",
+		Size = UDim2.new(0.7, 0, 0, 48),
+		Position = UDim2.new(0.15, 0, 0.14, 0),
+		BackgroundTransparency = 1,
+		TextColor3 = Color3.fromRGB(255, 230, 90),
+		TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBlack,
+		TextSize = 26,
+		Text = "",
+	}, gui)
+	local playerGui = player:WaitForChild("PlayerGui", 10)
+	if playerGui then
+		gui.Parent = playerGui
+	end
+end
+
+local function getHud(player)
+	local playerGui = player:FindFirstChild("PlayerGui")
+	return playerGui and playerGui:FindFirstChild("HUD")
+end
+
+local function setInfo(player, text)
+	local gui = getHud(player)
+	if gui then
+		gui.Info.Text = text
+	end
+end
+
+local function notify(player, text)
+	local gui = getHud(player)
+	if not gui then
+		return
+	end
+	local stamp = os.clock()
+	gui.Notif.Text = text
+	gui.Notif:SetAttribute("Stamp", stamp)
+	task.delay(3.5, function()
+		if gui.Parent and gui.Notif:GetAttribute("Stamp") == stamp then
+			gui.Notif.Text = ""
+		end
+	end)
+end
+
+-- grande valeur : NumberValue cachée (pas de limite) + affichage abrégé dans le classement
+local function bigStat(player, ls, name)
+	local stats = player:FindFirstChild("Stats") or make("Folder", { Name = "Stats" }, player)
+	local value = make("NumberValue", { Name = name }, stats)
+	local shown = make("StringValue", { Name = name, Value = "0" }, ls)
+	value.Changed:Connect(function()
+		shown.Value = fmt(value.Value)
+	end)
+	return value
+end
+
+local function rootOf(player)
+	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+end
+
+---------------------------------------------------------------- jeu
+-- Le jeu remplit ces champs :
+--   Game.storeName             nom du DataStore
+--   Game.serialize(profile)    -> table à sauvegarder
+--   Game.grantProduct(player, key) -> true si le produit Robux a été donné
+--   Game.cleanup(player)       (facultatif) appelé quand le joueur part
+local Game = {}
+local profiles = {} -- [player] = profil du jeu (doit contenir loaded, daily, streak)
+
+-- un stand avec une action (touche E / appui sur mobile)
+local function stand(name, pos, color, actionText, callback)
+	local pedestal = block({
+		Name = name,
+		Size = Vector3.new(7, 5, 7),
+		Position = pos + Vector3.new(0, 2.5, 0),
+		Color = color,
+		Material = Enum.Material.Neon,
+	})
+	label(pedestal, name, 6)
+	local prompt = make("ProximityPrompt", {
+		ObjectText = name,
+		ActionText = actionText,
+		HoldDuration = 0.2,
+		MaxActivationDistance = 13,
+		RequiresLineOfSight = false,
+	}, pedestal)
+	prompt.Triggered:Connect(function(player)
+		local profile = profiles[player]
+		if profile then
+			callback(player, profile)
+		end
+	end)
+	return pedestal
+end
+
+---------------------------------------------------------------- sauvegarde
+local store
+
+local function openStore()
+	pcall(function()
+		store = DataStoreService:GetDataStore(Game.storeName)
+	end)
+end
+
+-- renvoie (données ou nil, chargement réussi)
+local function loadData(player)
+	if not store then
+		return nil, false
+	end
+	local ok, data = pcall(function()
+		return store:GetAsync("u_" .. player.UserId)
+	end)
+	if not ok then
+		return nil, false
+	end
+	return type(data) == "table" and data or nil, true
+end
+
+local function save(player)
+	local profile = profiles[player]
+	if not store or not profile or not profile.loaded then
+		return
+	end
+	local data = Game.serialize(profile)
+	data.daily = profile.daily
+	data.streak = profile.streak
+	pcall(function()
+		store:SetAsync("u_" .. player.UserId, data)
+	end)
+end
+
+-- récompense quotidienne : renvoie le jour de la série (1 à 7) si elle est due, sinon nil
+local function dailyStreak(profile)
+	local now = os.time()
+	local last = profile.daily or 0
+	if now - last < 20 * 3600 then
+		return nil
+	end
+	profile.streak = now - last < 48 * 3600 and math.min((profile.streak or 0) + 1, 7) or 1
+	profile.daily = now
+	return profile.streak
+end
+
+---------------------------------------------------------------- contenu payant (Robux)
+-- 1. Publie le jeu, puis crée les passes et les produits sur create.roblox.com
+--    (ton expérience -> Monétisation -> Passes / Produits développeur).
+-- 2. Colle leurs ID dans la section « contenu payant » du jeu, plus bas.
+--    Tant qu'un ID vaut 0, l'achat est désactivé.
+local PASS_IDS = {}
+local PRODUCT_IDS = {}
+local passes = {} -- [player] = { clé = true }
+
+local function hasPass(player, key)
+	return passes[player] ~= nil and passes[player][key] == true
+end
+
+local function loadPasses(player)
+	local owned = {}
+	passes[player] = owned
+	for key, id in pairs(PASS_IDS) do
+		if id > 0 then
+			local ok, owns = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id)
+			end)
+			if ok and owns then
+				owned[key] = true
+			end
+		end
+	end
+end
+
+local function offer(player, kind, key)
+	local id = (kind == "pass" and PASS_IDS or PRODUCT_IDS)[key]
+	if not id or id == 0 then
+		notify(player, "🛒 Bientôt disponible !")
+	elseif kind == "pass" then
+		if hasPass(player, key) then
+			notify(player, "Tu possèdes déjà ce passe")
+		else
+			MarketplaceService:PromptGamePassPurchase(player, id)
+		end
+	else
+		MarketplaceService:PromptProductPurchase(player, id)
+	end
+end
+
+local function robuxStand(name, pos, kind, key)
+	local pedestal = block({
+		Name = name,
+		Size = Vector3.new(4, 4, 4),
+		Position = pos + Vector3.new(0, 2, 0),
+		Color = Color3.fromRGB(0, 200, 120),
+		Material = Enum.Material.Neon,
+	})
+	label(pedestal, name, 5)
+	local prompt = make("ProximityPrompt", {
+		ObjectText = name,
+		ActionText = "Acheter (Robux)",
+		HoldDuration = 0.3,
+		MaxActivationDistance = 10,
+		RequiresLineOfSight = false,
+	}, pedestal)
+	prompt.Triggered:Connect(function(player)
+		offer(player, kind, key)
+	end)
+	return pedestal
+end
+
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+	if not purchased or not passes[player] then
+		return
+	end
+	for key, id in pairs(PASS_IDS) do
+		if id == passId then
+			passes[player][key] = true
+			notify(player, "✅ Passe activé, merci !")
+		end
+	end
+end)
+
+MarketplaceService.ProcessReceipt = function(receipt)
+	local player = Players:GetPlayerByUserId(receipt.PlayerId)
+	if player and Game.grantProduct then
+		for key, id in pairs(PRODUCT_IDS) do
+			if id > 0 and id == receipt.ProductId and Game.grantProduct(player, key) then
+				save(player)
+				return Enum.ProductPurchaseDecision.PurchaseGranted
+			end
+		end
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
+---------------------------------------------------------------- départ des joueurs
+Players.PlayerRemoving:Connect(function(player)
+	save(player)
+	if Game.cleanup then
+		Game.cleanup(player)
+	end
+	profiles[player] = nil
+	passes[player] = nil
+end)
+
+game:BindToClose(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		save(player)
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(120)
+		for _, player in ipairs(Players:GetPlayers()) do
+			save(player)
+		end
+	end
+end)
+
+--[[
+	MINE DES PROFONDEURS — simulateur de minage
+	Creuse toujours plus bas : les minerais valent de plus en plus cher mais sont de
+	plus en plus durs. 30 pioches, 20 sacs, 11 minerais jusqu'à 300 couches de
+	profondeur, renaissances sans limite.
+]]
+
+---------------------------------------------------------------- réglages
+local GRID = 14 -- blocs par côté
+local CELL = 6 -- taille d'un bloc
+local MAX_DEPTH = 300
+local RESET_AFTER = 4000 -- la mine se régénère après ce nombre de blocs minés
+local CLICK_COOLDOWN = 0.15
+local REBIRTH_BASE_PRICE = 1000000 -- ×5 à chaque renaissance
+
+local ORES = { -- value = pièces, hp = solidité, depth = couche d'apparition, weight = fréquence
+	{ name = "Pierre", value = 1, hp = 3, depth = 1, weight = 100, color = Color3.fromRGB(125, 125, 130) },
+	{ name = "Charbon", value = 3, hp = 5, depth = 1, weight = 30, color = Color3.fromRGB(40, 40, 45) },
+	{ name = "Fer", value = 8, hp = 10, depth = 4, weight = 22, color = Color3.fromRGB(200, 150, 120) },
+	{ name = "Or", value = 25, hp = 25, depth = 10, weight = 15, color = Color3.fromRGB(255, 205, 40) },
+	{ name = "Diamant", value = 80, hp = 70, depth = 20, weight = 10, color = Color3.fromRGB(110, 230, 255) },
+	{ name = "Émeraude", value = 250, hp = 200, depth = 35, weight = 8, color = Color3.fromRGB(40, 220, 110) },
+	{ name = "Rubis", value = 800, hp = 600, depth = 55, weight = 7, color = Color3.fromRGB(235, 40, 70) },
+	{ name = "Mythril", value = 2500, hp = 1800, depth = 80, weight = 6, color = Color3.fromRGB(150, 170, 255) },
+	{ name = "Obsidienne étoilée", value = 8000, hp = 6000, depth = 110, weight = 5, color = Color3.fromRGB(70, 30, 110) },
+	{ name = "Cristal du néant", value = 30000, hp = 20000, depth = 150, weight = 4, color = Color3.fromRGB(255, 90, 255) },
+	{ name = "Cœur de planète", value = 120000, hp = 80000, depth = 200, weight = 3, color = Color3.fromRGB(255, 120, 30) },
+}
+
+local PICKS = {} -- 30 pioches : puissance ×1,8 et prix ×2,6 à chaque palier
+for k = 1, 30 do
+	PICKS[k] = { power = math.floor(1.8 ^ (k - 1) + 0.5), price = k == 1 and 0 or math.floor(50 * 2.6 ^ (k - 2)) }
+end
+local BAGS = {} -- 20 sacs : capacité ×1,7 et prix ×2,8
+for k = 1, 20 do
+	BAGS[k] = { size = math.floor(20 * 1.7 ^ (k - 1)), price = k == 1 and 0 or math.floor(100 * 2.8 ^ (k - 2)) }
+end
+
+---------------------------------------------------------------- contenu payant (ID à remplir)
+PASS_IDS.double = 0 -- passe « Minerais ×2 »
+PASS_IDS.bag = 0 -- passe « Sac sans fond » (capacité illimitée)
+PRODUCT_IDS.coins = 0 -- produit « Coffre de pièces » (50 % du prix de la prochaine pioche)
+
+Game.storeName = "MineDesProfondeurs_v1"
+openStore()
+
+---------------------------------------------------------------- profil
+local function rebirthPrice(profile)
+	return REBIRTH_BASE_PRICE * 5 ^ profile.rebirths.Value
+end
+
+local function refresh(player)
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+	local capacity = hasPass(player, "bag") and "∞" or fmt(BAGS[profile.bag].size)
+	setInfo(player, string.format(
+		"🪙 Pièces : %s\n🎒 Sac : %s / %s (vaut %s)\n⛏ Pioche n°%d (puissance %s)\n⬇ Record : couche %d\n⭐ Renaissance : %s 🪙",
+		fmt(profile.coins.Value),
+		fmt(profile.count),
+		capacity,
+		fmt(profile.bagValue),
+		profile.pick,
+		fmt(PICKS[profile.pick].power),
+		profile.depth.Value,
+		fmt(rebirthPrice(profile))
+	))
+end
+
+Game.serialize = function(profile)
+	return {
+		coins = profile.coins.Value,
+		rebirths = profile.rebirths.Value,
+		depth = profile.depth.Value,
+		pick = profile.pick,
+		bag = profile.bag,
+		count = profile.count,
+		bagValue = profile.bagValue,
+	}
+end
+
+Game.grantProduct = function(player, key)
+	local profile = profiles[player]
+	if key ~= "coins" or not profile then
+		return false
+	end
+	local nextPick = PICKS[profile.pick + 1] or PICKS[#PICKS]
+	local amount = math.max(500, math.floor(nextPick.price * 0.5))
+	profile.coins.Value += amount
+	notify(player, "💎 +" .. fmt(amount) .. " 🪙")
+	return true
+end
+
+---------------------------------------------------------------- surface
+local HALF = GRID * CELL / 2 -- demi-largeur du puits
+local SURFACE = Vector3.new(0, 4, HALF + 30)
+
+local grass = { Color = Color3.fromRGB(95, 170, 90), Material = Enum.Material.Grass }
+grass.Size = Vector3.new(300, 2, 108)
+grass.Position = Vector3.new(0, -1, HALF + 54)
+block(grass)
+grass.Position = Vector3.new(0, -1, -HALF - 54)
+block(grass)
+grass.Size = Vector3.new(108, 2, HALF * 2)
+grass.Position = Vector3.new(HALF + 54, -1, 0)
+block(grass)
+grass.Position = Vector3.new(-HALF - 54, -1, 0)
+block(grass)
+
+-- parois indestructibles du puits
+local rock = { Color = Color3.fromRGB(45, 45, 50), Material = Enum.Material.Slate }
+rock.Size = Vector3.new(2, 2000, HALF * 2 + 4)
+rock.Position = Vector3.new(HALF + 1, -1002, 0)
+block(rock)
+rock.Position = Vector3.new(-HALF - 1, -1002, 0)
+block(rock)
+rock.Size = Vector3.new(HALF * 2 + 4, 2000, 2)
+rock.Position = Vector3.new(0, -1002, HALF + 1)
+block(rock)
+rock.Position = Vector3.new(0, -1002, -HALF - 1)
+block(rock)
+
+make("SpawnLocation", {
+	Anchored = true,
+	Size = Vector3.new(10, 1, 10),
+	Position = Vector3.new(0, 0.5, HALF + 30),
+	Color = Color3.fromRGB(255, 255, 255),
+	Material = Enum.Material.Neon,
+	Neutral = true,
+}, world)
+
+local function sell(player, profile)
+	if profile.bagValue > 0 then
+		local amount = profile.bagValue
+		profile.bagValue = 0
+		profile.count = 0
+		profile.coins.Value += amount
+		notify(player, "+" .. fmt(amount) .. " 🪙")
+		refresh(player)
+	end
+end
+
+local sellPad = block({
+	Name = "Vente",
+	Size = Vector3.new(14, 0.6, 10),
+	Position = Vector3.new(-22, 0.3, HALF + 8),
+	Color = Color3.fromRGB(60, 220, 100),
+	Material = Enum.Material.Neon,
+})
+label(sellPad, "💰 VENDRE LE SAC\n(marche ici)", 7)
+sellPad.Touched:Connect(function(hit)
+	local player = hit.Parent and Players:GetPlayerFromCharacter(hit.Parent)
+	local profile = player and profiles[player]
+	if profile then
+		sell(player, profile)
+	end
+end)
+
+stand("⛏ Forge des pioches", Vector3.new(-45, 0, HALF + 30), Color3.fromRGB(70, 140, 255), "Améliorer", function(player, profile)
+	local nextPick = PICKS[profile.pick + 1]
+	if not nextPick then
+		notify(player, "Tu as déjà la meilleure pioche !")
+	elseif profile.coins.Value < nextPick.price then
+		notify(player, "Pioche n°" .. (profile.pick + 1) .. " : " .. fmt(nextPick.price) .. " 🪙")
+	else
+		profile.coins.Value -= nextPick.price
+		profile.pick += 1
+		notify(player, "⛏ Pioche n°" .. profile.pick .. " — puissance " .. fmt(nextPick.power))
+	end
+	refresh(player)
+end)
+
+stand("🎒 Atelier des sacs", Vector3.new(-28, 0, HALF + 30), Color3.fromRGB(200, 140, 80), "Agrandir", function(player, profile)
+	local nextBag = BAGS[profile.bag + 1]
+	if not nextBag then
+		notify(player, "Tu as déjà le plus grand sac !")
+	elseif profile.coins.Value < nextBag.price then
+		notify(player, "Sac de " .. fmt(nextBag.size) .. " places : " .. fmt(nextBag.price) .. " 🪙")
+	else
+		profile.coins.Value -= nextBag.price
+		profile.bag += 1
+		notify(player, "🎒 Ton sac contient maintenant " .. fmt(nextBag.size) .. " minerais")
+	end
+	refresh(player)
+end)
+
+stand("⭐ Renaissance", Vector3.new(28, 0, HALF + 30), Color3.fromRGB(255, 215, 0), "Renaître", function(player, profile)
+	local price = rebirthPrice(profile)
+	if profile.coins.Value < price then
+		notify(player, "Renaissance : " .. fmt(price) .. " 🪙 (minerais ×2 de plus à chaque fois)")
+		return
+	end
+	profile.coins.Value = 0
+	profile.pick = 1
+	profile.bag = 1
+	profile.count = 0
+	profile.bagValue = 0
+	profile.rebirths.Value += 1
+	notify(player, "⭐ Renaissance n°" .. profile.rebirths.Value .. " ! Valeur des minerais ×" .. fmt(2 ^ profile.rebirths.Value))
+	refresh(player)
+end)
+
+robuxStand("💎 Passe Minerais ×2", Vector3.new(45, 0, HALF + 22), "pass", "double")
+robuxStand("🎒 Passe Sac sans fond", Vector3.new(45, 0, HALF + 32), "pass", "bag")
+robuxStand("💰 Coffre de pièces", Vector3.new(45, 0, HALF + 42), "product", "coins")
+
+---------------------------------------------------------------- mine
+local mine = make("Folder", { Name = "Mine" }, workspace)
+local cells = {} -- ["x,d,z"] = true : case déjà générée (bloc présent ou déjà miné)
+local minedCount = 0
+local rng = Random.new()
+local onMine -- défini plus bas
+
+local function pickOre(depth)
+	local total = 0
+	for _, ore in ipairs(ORES) do
+		if ore.depth <= depth then
+			total += ore.weight
+		end
+	end
+	local roll = rng:NextNumber(0, total)
+	for _, ore in ipairs(ORES) do
+		if ore.depth <= depth then
+			roll -= ore.weight
+			if roll <= 0 then
+				return ore
+			end
+		end
+	end
+	return ORES[1]
+end
+
+local function generate(x, depth, z)
+	if x < 1 or x > GRID or z < 1 or z > GRID or depth < 1 then
+		return
+	end
+	local key = x .. "," .. depth .. "," .. z
+	if cells[key] then
+		return
+	end
+	cells[key] = true
+	local bedrock = depth > MAX_DEPTH
+	local ore = pickOre(depth)
+	local hp = math.ceil(ore.hp * 1.03 ^ (depth - 1))
+	local part = block({
+		Name = bedrock and "Roche du fond" or ore.name,
+		Size = Vector3.new(CELL, CELL, CELL),
+		Position = Vector3.new((x - 0.5) * CELL - HALF, -(depth - 0.5) * CELL, (z - 0.5) * CELL - HALF),
+		Color = bedrock and Color3.fromRGB(20, 20, 25) or ore.color,
+		Material = (bedrock or ore.value == 1) and Enum.Material.Slate or Enum.Material.Foil,
+	}, mine)
+	if bedrock then
+		return
+	end
+	local hpLeft = hp
+	local detector = make("ClickDetector", { MaxActivationDistance = 16 }, part)
+	detector.MouseClick:Connect(function(player)
+		local profile = profiles[player]
+		if not profile or not part.Parent then
+			return
+		end
+		local now = os.clock()
+		if now - profile.lastClick < CLICK_COOLDOWN then
+			return
+		end
+		profile.lastClick = now
+		local capacity = hasPass(player, "bag") and math.huge or BAGS[profile.bag].size
+		if profile.count >= capacity then
+			notify(player, "🎒 Sac plein ! Remonte vendre (outil 🏠 Surface)")
+			return
+		end
+		hpLeft -= PICKS[profile.pick].power
+		if hpLeft > 0 then
+			part.Transparency = 0.6 * (1 - hpLeft / hp)
+			return
+		end
+		part:Destroy()
+		onMine(player, profile, ore, x, depth, z)
+	end)
+end
+
+onMine = function(player, profile, ore, x, depth, z)
+	local value = ore.value * 2 ^ profile.rebirths.Value
+	if hasPass(player, "double") then
+		value *= 2
+	end
+	profile.count += 1
+	profile.bagValue += value
+	if depth > profile.depth.Value then
+		profile.depth.Value = depth
+	end
+	if ore.value >= 80 then
+		notify(player, "✨ " .. ore.name .. " ! (+" .. fmt(value) .. ")")
+	end
+	refresh(player)
+	minedCount += 1
+	-- dévoile les blocs voisins
+	generate(x + 1, depth, z)
+	generate(x - 1, depth, z)
+	generate(x, depth, z + 1)
+	generate(x, depth, z - 1)
+	generate(x, depth + 1, z)
+	generate(x, depth - 1, z)
+end
+
+local function toSurface(player)
+	if player.Character then
+		player.Character:PivotTo(CFrame.new(SURFACE))
+	end
+end
+
+local function resetMine()
+	for _, player in ipairs(Players:GetPlayers()) do
+		local root = rootOf(player)
+		if root and root.Position.Y < -1 then
+			toSurface(player)
+			notify(player, "⛰ La mine s'est effondrée et régénérée !")
+		end
+	end
+	mine:ClearAllChildren()
+	cells = {}
+	minedCount = 0
+	for x = 1, GRID do
+		for z = 1, GRID do
+			generate(x, 1, z)
+		end
+	end
+end
+resetMine()
+
+task.spawn(function()
+	while true do
+		task.wait(10)
+		if minedCount >= RESET_AFTER then
+			resetMine()
+		end
+	end
+end)
+
+---------------------------------------------------------------- joueurs
+local function giveTools(player)
+	local backpack = player:WaitForChild("Backpack", 10)
+	if not backpack then
+		return
+	end
+	local home = make("Tool", {
+		Name = "🏠 Surface",
+		RequiresHandle = false,
+		CanBeDropped = false,
+		ToolTip = "Équipe puis clique pour remonter à la surface",
+	}, backpack)
+	home.Activated:Connect(function()
+		toSurface(player)
+	end)
+end
+
+local function onPlayer(player)
+	local ls = make("Folder", { Name = "leaderstats" }, player)
+	local profile = {
+		coins = bigStat(player, ls, "Pièces"),
+		depth = make("IntValue", { Name = "Profondeur" }, ls),
+		rebirths = make("IntValue", { Name = "Renaissances" }, ls),
+		pick = 1,
+		bag = 1,
+		count = 0,
+		bagValue = 0,
+		lastClick = 0,
+		loaded = false,
+	}
+	local data, loaded = loadData(player)
+	profile.loaded = loaded
+	if data then
+		profile.coins.Value = tonumber(data.coins) or 0
+		profile.rebirths.Value = tonumber(data.rebirths) or 0
+		profile.depth.Value = tonumber(data.depth) or 0
+		profile.pick = math.clamp(tonumber(data.pick) or 1, 1, #PICKS)
+		profile.bag = math.clamp(tonumber(data.bag) or 1, 1, #BAGS)
+		profile.count = tonumber(data.count) or 0
+		profile.bagValue = tonumber(data.bagValue) or 0
+		profile.daily = tonumber(data.daily) or 0
+		profile.streak = tonumber(data.streak) or 0
+	end
+	if not player.Parent then
+		return
+	end
+	profiles[player] = profile
+	task.spawn(loadPasses, player)
+	createHud(player)
+	profile.coins.Changed:Connect(function()
+		refresh(player)
+	end)
+	refresh(player)
+
+	player.CharacterAdded:Connect(function()
+		giveTools(player)
+	end)
+	if player.Character then
+		giveTools(player)
+	end
+
+	task.wait(4)
+	local streak = profiles[player] == profile and dailyStreak(profile)
+	if streak then
+		local nextPick = PICKS[profile.pick + 1] or PICKS[#PICKS]
+		local amount = math.floor(math.max(100, nextPick.price * 0.1)) * streak
+		profile.coins.Value += amount
+		notify(player, "🎁 Récompense du jour " .. streak .. "/7 : +" .. fmt(amount) .. " 🪙 — reviens demain !")
+	else
+		notify(player, "⛏ Clique sur les blocs pour miner, puis vends ton sac en haut")
+	end
+end
+
+Players.PlayerAdded:Connect(onPlayer)
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayer, player)
+end
+]]></ProtectedString>
+			</Properties>
+		</Item>
+	</Item>
+</roblox>

@@ -28,6 +28,24 @@ local SEEDS = { -- grow = secondes de pousse, value = prix de vente
 	{ name = "Fruit du dragon", price = 2500, grow = 300, value = 9000, color = Color3.fromRGB(255, 60, 160) },
 	{ name = "Étoile filante", price = 12000, grow = 900, value = 55000, color = Color3.fromRGB(255, 240, 120) },
 }
+do -- 10 graines de fin de jeu générées : prix ×4, pousse plus longue, valeur = 5× le prix
+	local NAMES = {
+		"Champignon lumineux", "Cactus de cristal", "Rose de feu", "Lotus de glace", "Arbre à nuages",
+		"Baie du néant", "Orchidée solaire", "Racine ancienne", "Fleur galactique", "Graine d'éternité",
+	}
+	for k, name in ipairs(NAMES) do
+		local price = 12000 * 4 ^ k
+		table.insert(SEEDS, {
+			name = name,
+			price = price,
+			grow = math.floor(math.min(3600, 900 * 1.3 ^ k)),
+			value = price * 5,
+			color = Color3.fromHSV((k * 0.13) % 1, 0.7, 1),
+		})
+	end
+end
+-- chaque graine se débloque à un niveau de jardinier : graine n° i -> niveau (i - 1) × 4 + 1
+-- l'expérience vient des récoltes ; chaque niveau ajoute +2 % au prix de vente
 local MUTATIONS = {
 	{ name = "Dorée", mult = 5, chance = 0.08, color = Color3.fromRGB(255, 205, 0) },
 	{ name = "Arc-en-ciel", mult = 20, chance = 0.015 },
@@ -101,7 +119,7 @@ local function createHud(player)
 	gui.ResetOnSpawn = false
 	local info = make("TextLabel", {
 		Name = "Info",
-		Size = UDim2.new(0, 290, 0, 120),
+		Size = UDim2.new(0, 290, 0, 140),
 		Position = UDim2.new(0, 12, 0.5, -60),
 		BackgroundColor3 = Color3.fromRGB(20, 30, 20),
 		BackgroundTransparency = 0.25,
@@ -229,6 +247,10 @@ local profiles = {} -- [player] = { coins (IntValue), basket, inv, tiles, plot, 
 local plots = {}
 local rng = Random.new()
 
+local function levelOf(profile)
+	return math.floor(math.sqrt(profile.xp / 20)) + 1
+end
+
 local function refreshHud(player)
 	local profile = profiles[player]
 	local gui = getHud(player)
@@ -242,10 +264,12 @@ local function refreshHud(player)
 		end
 	end
 	gui.Info.Text = string.format(
-		"🪙 Pièces : %s\n🧺 Récolte à vendre : %s\n🌱 Graines : %s",
+		"🪙 Pièces : %s\n🧺 Récolte à vendre : %s\n🌱 Graines : %s\n⭐ Niveau %d (vente +%d %%)",
 		fmt(profile.coins.Value),
 		fmt(profile.basket),
-		#seeds > 0 and table.concat(seeds, ", ") or "aucune"
+		#seeds > 0 and table.concat(seeds, ", ") or "aucune",
+		levelOf(profile),
+		(levelOf(profile) - 1) * 2
 	)
 end
 
@@ -340,8 +364,12 @@ local function onTile(plot, index, player)
 		end
 		notify(player, "Tu n'as pas de graines : va à la boutique au centre !")
 	elseif crop.ripe then
-		local value = cropValue(crop)
+		local value = math.floor(cropValue(crop) * (1 + 0.02 * (levelOf(profile) - 1)))
 		profile.basket += value
+		profile.xp += crop.seed * 5
+		if profile.levelValue then
+			profile.levelValue.Value = levelOf(profile)
+		end
 		local mutationName = crop.mut > 0 and (" " .. MUTATIONS[crop.mut].name) or ""
 		notify(player, "🧺 " .. SEEDS[crop.seed].name .. mutationName .. " récoltée (+" .. fmt(value) .. ")")
 		removeCrop(tile)
@@ -487,7 +515,7 @@ for i, seed in ipairs(SEEDS) do
 		Material = Enum.Material.Neon,
 		CanCollide = false,
 	})
-	label(stand, string.format("%s — %s 🪙\npousse : %d s · vaut %s", seed.name, fmt(seed.price), seed.grow, fmt(seed.value)), 6.5)
+	label(stand, string.format("%s — %s 🪙 (niv. %d)\npousse : %d s · vaut %s", seed.name, fmt(seed.price), (i - 1) * 4 + 1, seed.grow, fmt(seed.value)), 6.5)
 	local prompt = make("ProximityPrompt", {
 		ObjectText = "Graine de " .. seed.name,
 		ActionText = "Acheter (" .. fmt(seed.price) .. " 🪙)",
@@ -500,7 +528,10 @@ for i, seed in ipairs(SEEDS) do
 		if not profile then
 			return
 		end
-		if i == 1 and isBroke(profile) then
+		local required = (i - 1) * 4 + 1
+		if levelOf(profile) < required then
+			notify(player, seed.name .. " se débloque au niveau " .. required .. " (récolte pour gagner de l'expérience)")
+		elseif i == 1 and isBroke(profile) then
 			profile.inv[1] += 1
 			notify(player, "🎁 Une graine de carotte offerte pour te relancer !")
 		elseif profile.coins.Value < seed.price then
@@ -626,6 +657,9 @@ local function save(player)
 		store:SetAsync("u_" .. player.UserId, {
 			coins = profile.coins.Value,
 			basket = profile.basket,
+			xp = profile.xp,
+			daily = profile.daily,
+			streak = profile.streak,
 			tiles = profile.tiles,
 			inv = profile.inv,
 			crops = crops,
@@ -670,6 +704,24 @@ MarketplaceService.ProcessReceipt = function(receipt)
 	return Enum.ProductPurchaseDecision.NotProcessedYet
 end
 
+-- récompense quotidienne : série de 7 jours, à réclamer toutes les 20 h
+local function giveDaily(player)
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+	local now = os.time()
+	local last = profile.daily or 0
+	if now - last < 20 * 3600 then
+		return
+	end
+	profile.streak = now - last < 48 * 3600 and math.min((profile.streak or 0) + 1, 7) or 1
+	profile.daily = now
+	local amount = math.floor(math.max(50, expandPrice(profile) * 0.2)) * profile.streak
+	profile.coins.Value += amount
+	notify(player, "🎁 Récompense du jour " .. profile.streak .. "/7 : +" .. fmt(amount) .. " — reviens demain !")
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local profile = {
@@ -677,6 +729,7 @@ local function onPlayer(player)
 		basket = 0,
 		inv = {},
 		tiles = START_TILES,
+		xp = 0,
 		plot = nil,
 		loaded = false,
 	}
@@ -694,6 +747,9 @@ local function onPlayer(player)
 			if type(data) == "table" then
 				profile.coins.Value = tonumber(data.coins) or START_COINS
 				profile.basket = tonumber(data.basket) or 0
+				profile.xp = tonumber(data.xp) or 0
+				profile.daily = tonumber(data.daily) or 0
+				profile.streak = tonumber(data.streak) or 0
 				profile.tiles = math.clamp(tonumber(data.tiles) or START_TILES, START_TILES, TILE_COUNT)
 				if type(data.inv) == "table" then
 					for i = 1, #SEEDS do
@@ -711,6 +767,8 @@ local function onPlayer(player)
 	end
 	profiles[player] = profile
 	task.spawn(loadPasses, player)
+	task.delay(4, giveDaily, player)
+	profile.levelValue = make("IntValue", { Name = "Niveau", Value = levelOf(profile) }, ls)
 	createHud(player)
 	profile.coins.Changed:Connect(function()
 		refreshHud(player)
