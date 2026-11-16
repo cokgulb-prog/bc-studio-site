@@ -5,6 +5,7 @@
 ]]
 
 local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
@@ -100,6 +101,74 @@ local function killOnTouch(part)
 			hum.Health = 0
 		end
 	end)
+end
+
+---------------------------------------------------------------- contenu payant (Robux)
+-- 1. Publie le jeu, puis crée les passes et les produits sur create.roblox.com
+--    (ton expérience -> Monétisation -> Passes / Produits développeur).
+-- 2. Colle leurs ID ci-dessous. Tant qu'un ID vaut 0, l'achat est désactivé.
+local PASS_IDS = {
+	speed = 0, -- passe « Vitesse turbo » (course plus rapide)
+}
+local PRODUCT_IDS = {
+	skip = 0, -- produit « Passer l'étape »
+}
+local passes = {} -- [player] = { clé = true }
+
+local function hasPass(player, key)
+	return passes[player] ~= nil and passes[player][key] == true
+end
+
+local function loadPasses(player)
+	local owned = {}
+	passes[player] = owned
+	for key, id in pairs(PASS_IDS) do
+		if id > 0 then
+			local ok, owns = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id)
+			end)
+			if ok and owns then
+				owned[key] = true
+			end
+		end
+	end
+end
+
+local function offer(player, kind, key)
+	local id = (kind == "pass" and PASS_IDS or PRODUCT_IDS)[key]
+	if not id or id == 0 then
+		notify(player, "🛒 Bientôt disponible !")
+	elseif kind == "pass" then
+		if hasPass(player, key) then
+			notify(player, "Tu possèdes déjà ce passe")
+		else
+			MarketplaceService:PromptGamePassPurchase(player, id)
+		end
+	else
+		MarketplaceService:PromptProductPurchase(player, id)
+	end
+end
+
+local function robuxStand(name, pos, kind, key)
+	local stand = block({
+		Name = name,
+		Size = Vector3.new(4, 4, 4),
+		Position = pos + Vector3.new(0, 2, 0),
+		Color = Color3.fromRGB(0, 200, 120),
+		Material = Enum.Material.Neon,
+	})
+	label(stand, name, 5)
+	local prompt = make("ProximityPrompt", {
+		ObjectText = name,
+		ActionText = "Acheter (Robux)",
+		HoldDuration = 0.3,
+		MaxActivationDistance = 10,
+		RequiresLineOfSight = false,
+	}, stand)
+	prompt.Triggered:Connect(function(player)
+		offer(player, kind, key)
+	end)
+	return stand
 end
 
 ---------------------------------------------------------------- décor
@@ -299,6 +368,56 @@ local function save(player)
 	end)
 end
 
+-- achats Robux : passes (permanents) et produits (rachetables)
+local function applySpeed(player)
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if hum and hasPass(player, "speed") then
+		hum.WalkSpeed = 22
+	end
+end
+
+local function grantProduct(player, key)
+	local ls = player:FindFirstChild("leaderstats")
+	if key ~= "skip" or not ls then
+		return false
+	end
+	if ls["Étape"].Value >= STAGES - 1 then
+		ls.Victoires.Value += 1
+		ls["Étape"].Value = 0
+	else
+		ls["Étape"].Value += 1
+	end
+	teleportToStage(player)
+	notify(player, "⏭ Étape passée !")
+	return true
+end
+
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+	if not purchased or not passes[player] then
+		return
+	end
+	for key, id in pairs(PASS_IDS) do
+		if id == passId then
+			passes[player][key] = true
+			notify(player, "✅ Passe activé, merci !")
+			applySpeed(player)
+		end
+	end
+end)
+
+MarketplaceService.ProcessReceipt = function(receipt)
+	local player = Players:GetPlayerByUserId(receipt.PlayerId)
+	if player then
+		for key, id in pairs(PRODUCT_IDS) do
+			if id > 0 and id == receipt.ProductId and grantProduct(player, key) then
+				save(player)
+				return Enum.ProductPurchaseDecision.PurchaseGranted
+			end
+		end
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local stage = make("IntValue", { Name = "Étape" }, ls)
@@ -308,6 +427,7 @@ local function onPlayer(player)
 		char:WaitForChild("HumanoidRootPart", 10)
 		task.wait(0.15)
 		teleportToStage(player)
+		applySpeed(player)
 	end)
 
 	task.spawn(createHud, player)
@@ -324,10 +444,31 @@ local function onPlayer(player)
 			end
 		end
 	end
+	loadPasses(player)
+	applySpeed(player)
 	if stage.Value > 0 then
 		teleportToStage(player)
 	end
 end
+
+-- boutique Robux : passer une étape (sur chaque checkpoint) et passe vitesse (au départ)
+for i = 0, STAGES - 1 do
+	local prompt = make("ProximityPrompt", {
+		ObjectText = "Trop dur ?",
+		ActionText = "Passer l'étape (Robux)",
+		HoldDuration = 0.5,
+		MaxActivationDistance = 9,
+		RequiresLineOfSight = false,
+	}, checkpoints[i])
+	prompt.Triggered:Connect(function(player)
+		local ls = player:FindFirstChild("leaderstats")
+		if ls and ls["Étape"].Value == i then
+			offer(player, "product", "skip")
+		end
+	end)
+end
+robuxStand("⚡ Passe Vitesse turbo", Vector3.new(-9, Y + 0.5, -4), "pass", "speed")
+block({ Size = Vector3.new(6, 1, 6), Position = Vector3.new(-9, Y, -4), Color = Color3.fromRGB(240, 240, 255), Material = Enum.Material.Neon })
 
 for i = 1, STAGES do
 	checkpoints[i].Touched:Connect(function(hit)
@@ -355,6 +496,7 @@ for _, player in ipairs(Players:GetPlayers()) do
 end
 
 Players.PlayerRemoving:Connect(function(player)
+	passes[player] = nil
 	save(player)
 	loaded[player] = nil
 end)

@@ -15,6 +15,7 @@
 ]]
 
 local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 
@@ -160,6 +161,75 @@ local function notify(player, text)
 	end)
 end
 
+---------------------------------------------------------------- contenu payant (Robux)
+-- 1. Publie le jeu, puis crée les passes et les produits sur create.roblox.com
+--    (ton expérience -> Monétisation -> Passes / Produits développeur).
+-- 2. Colle leurs ID ci-dessous. Tant qu'un ID vaut 0, l'achat est désactivé.
+local PASS_IDS = {
+	double = 0, -- passe « Énergie ×2 »
+	auto = 0, -- passe « Clic automatique »
+}
+local PRODUCT_IDS = {
+	coins = 0, -- produit « Sac de pièces » (25 % du prix de la prochaine renaissance)
+}
+local passes = {} -- [player] = { clé = true }
+
+local function hasPass(player, key)
+	return passes[player] ~= nil and passes[player][key] == true
+end
+
+local function loadPasses(player)
+	local owned = {}
+	passes[player] = owned
+	for key, id in pairs(PASS_IDS) do
+		if id > 0 then
+			local ok, owns = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id)
+			end)
+			if ok and owns then
+				owned[key] = true
+			end
+		end
+	end
+end
+
+local function offer(player, kind, key)
+	local id = (kind == "pass" and PASS_IDS or PRODUCT_IDS)[key]
+	if not id or id == 0 then
+		notify(player, "🛒 Bientôt disponible !")
+	elseif kind == "pass" then
+		if hasPass(player, key) then
+			notify(player, "Tu possèdes déjà ce passe")
+		else
+			MarketplaceService:PromptGamePassPurchase(player, id)
+		end
+	else
+		MarketplaceService:PromptProductPurchase(player, id)
+	end
+end
+
+local function robuxStand(name, pos, kind, key)
+	local stand = block({
+		Name = name,
+		Size = Vector3.new(4, 4, 4),
+		Position = pos + Vector3.new(0, 2, 0),
+		Color = Color3.fromRGB(0, 200, 120),
+		Material = Enum.Material.Neon,
+	})
+	label(stand, name, 5)
+	local prompt = make("ProximityPrompt", {
+		ObjectText = name,
+		ActionText = "Acheter (Robux)",
+		HoldDuration = 0.3,
+		MaxActivationDistance = 10,
+		RequiresLineOfSight = false,
+	}, stand)
+	prompt.Triggered:Connect(function(player)
+		offer(player, kind, key)
+	end)
+	return stand
+end
+
 ---------------------------------------------------------------- données
 local store
 pcall(function()
@@ -271,6 +341,9 @@ local function onClick(player)
 		notify(player, "🔒 " .. lockedZone.name .. " : " .. lockedZone.rebirths .. " renaissance(s) requise(s)")
 	end
 	local gain = WEIGHTS[profile.tier].power * multiplier(profile) * zoneMult
+	if hasPass(player, "double") then
+		gain *= 2
+	end
 	profile.energy.Value += math.floor(gain + 0.5)
 end
 
@@ -315,6 +388,43 @@ local function save(player)
 	end)
 end
 
+-- achats Robux : passes (permanents) et produits (rachetables)
+local function grantProduct(player, key)
+	local profile = profiles[player]
+	if key ~= "coins" or not profile then
+		return false
+	end
+	local amount = math.floor(rebirthPrice(profile) * 0.25)
+	profile.coins.Value += amount
+	notify(player, "💎 +" .. fmt(amount) .. " 🪙")
+	return true
+end
+
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+	if not purchased or not passes[player] then
+		return
+	end
+	for key, id in pairs(PASS_IDS) do
+		if id == passId then
+			passes[player][key] = true
+			notify(player, "✅ Passe activé, merci !")
+		end
+	end
+end)
+
+MarketplaceService.ProcessReceipt = function(receipt)
+	local player = Players:GetPlayerByUserId(receipt.PlayerId)
+	if player then
+		for key, id in pairs(PRODUCT_IDS) do
+			if id > 0 and id == receipt.ProductId and grantProduct(player, key) then
+				save(player)
+				return Enum.ProductPurchaseDecision.PurchaseGranted
+			end
+		end
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local profile = {
@@ -347,6 +457,7 @@ local function onPlayer(player)
 		return
 	end
 	profiles[player] = profile
+	task.spawn(loadPasses, player)
 
 	createHud(player)
 	for _, value in ipairs({ profile.energy, profile.coins, profile.rebirths }) do
@@ -518,6 +629,36 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
+-- boutique Robux
+robuxStand("💎 Passe Énergie ×2", Vector3.new(-16, 0, 55), "pass", "double")
+robuxStand("🤖 Passe Clic automatique", Vector3.new(0, 0, 55), "pass", "auto")
+robuxStand("💰 Sac de pièces", Vector3.new(16, 0, 55), "product", "coins")
+
+-- clic automatique pour les détenteurs du passe
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+		for _, player in ipairs(Players:GetPlayers()) do
+			if hasPass(player, "auto") and player.Character then
+				onClick(player)
+			end
+		end
+	end
+end)
+
+-- affichage des chances de l'œuf (obligatoire pour un tirage au sort lié à de l'argent réel)
+do
+	local odds = {}
+	for _, pet in ipairs(PETS) do
+		table.insert(odds, string.format("%s %s %%", pet.name, tostring(math.floor(pet.chance / totalChance * 1000 + 0.5) / 10)))
+	end
+	local egg = world:FindFirstChild("🥚 Œuf mystère")
+	if egg then
+		local text = label(egg, "Chances : " .. table.concat(odds, " · "), 10)
+		text.Parent.Size = UDim2.new(0, 420, 0, 60)
+	end
+end
+
 ---------------------------------------------------------------- connexions
 Players.PlayerAdded:Connect(onPlayer)
 for _, player in ipairs(Players:GetPlayers()) do
@@ -525,6 +666,7 @@ for _, player in ipairs(Players:GetPlayers()) do
 end
 
 Players.PlayerRemoving:Connect(function(player)
+	passes[player] = nil
 	save(player)
 	profiles[player] = nil
 	if petParts[player] then

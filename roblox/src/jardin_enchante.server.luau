@@ -7,6 +7,7 @@
 ]]
 
 local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
 local DataStoreService = game:GetService("DataStoreService")
 
 ---------------------------------------------------------------- réglages
@@ -139,6 +140,74 @@ local function notify(player, text)
 			gui.Notif.Text = ""
 		end
 	end)
+end
+
+---------------------------------------------------------------- contenu payant (Robux)
+-- 1. Publie le jeu, puis crée les passes et les produits sur create.roblox.com
+--    (ton expérience -> Monétisation -> Passes / Produits développeur).
+-- 2. Colle leurs ID ci-dessous. Tant qu'un ID vaut 0, l'achat est désactivé.
+local PASS_IDS = {
+	grow = 0, -- passe « Engrais magique » (pousse ×2 en permanence)
+}
+local PRODUCT_IDS = {
+	coins = 0, -- produit « Bourse de pièces » (2× le prix du prochain agrandissement, 1 000 minimum)
+}
+local passes = {} -- [player] = { clé = true }
+
+local function hasPass(player, key)
+	return passes[player] ~= nil and passes[player][key] == true
+end
+
+local function loadPasses(player)
+	local owned = {}
+	passes[player] = owned
+	for key, id in pairs(PASS_IDS) do
+		if id > 0 then
+			local ok, owns = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id)
+			end)
+			if ok and owns then
+				owned[key] = true
+			end
+		end
+	end
+end
+
+local function offer(player, kind, key)
+	local id = (kind == "pass" and PASS_IDS or PRODUCT_IDS)[key]
+	if not id or id == 0 then
+		notify(player, "🛒 Bientôt disponible !")
+	elseif kind == "pass" then
+		if hasPass(player, key) then
+			notify(player, "Tu possèdes déjà ce passe")
+		else
+			MarketplaceService:PromptGamePassPurchase(player, id)
+		end
+	else
+		MarketplaceService:PromptProductPurchase(player, id)
+	end
+end
+
+local function robuxStand(name, pos, kind, key)
+	local stand = block({
+		Name = name,
+		Size = Vector3.new(4, 4, 4),
+		Position = pos + Vector3.new(0, 2, 0),
+		Color = Color3.fromRGB(0, 200, 120),
+		Material = Enum.Material.Neon,
+	})
+	label(stand, name, 5)
+	local prompt = make("ProximityPrompt", {
+		ObjectText = name,
+		ActionText = "Acheter (Robux)",
+		HoldDuration = 0.3,
+		MaxActivationDistance = 10,
+		RequiresLineOfSight = false,
+	}, stand)
+	prompt.Triggered:Connect(function(player)
+		offer(player, kind, key)
+	end)
+	return stand
 end
 
 ---------------------------------------------------------------- données
@@ -467,6 +536,10 @@ sellPrompt.Triggered:Connect(function(player)
 	refreshHud(player)
 end)
 
+-- boutique Robux
+robuxStand("🧪 Passe Engrais magique (pousse ×2)", Vector3.new(-16, 0, -22), "pass", "grow")
+robuxStand("💰 Bourse de pièces", Vector3.new(16, 0, -22), "product", "coins")
+
 ---------------------------------------------------------------- pousse et météo
 local raining = false
 
@@ -480,6 +553,9 @@ task.spawn(function()
 				if crop then
 					if raining then
 						crop.plantedAt -= 1 -- la pluie double la vitesse
+					end
+					if plot.owner and hasPass(plot.owner, "grow") then
+						crop.plantedAt -= 1 -- passe Engrais magique
 					end
 					local seed = SEEDS[crop.seed]
 					local progress = math.clamp((now - crop.plantedAt) / seed.grow, 0, 1)
@@ -548,6 +624,43 @@ local function save(player)
 	end)
 end
 
+-- achats Robux : passes (permanents) et produits (rachetables)
+local function grantProduct(player, key)
+	local profile = profiles[player]
+	if key ~= "coins" or not profile then
+		return false
+	end
+	local amount = math.max(1000, 2 * expandPrice(profile))
+	profile.coins.Value += amount
+	notify(player, "💎 +" .. fmt(amount) .. " 🪙")
+	return true
+end
+
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+	if not purchased or not passes[player] then
+		return
+	end
+	for key, id in pairs(PASS_IDS) do
+		if id == passId then
+			passes[player][key] = true
+			notify(player, "✅ Passe activé, merci !")
+		end
+	end
+end)
+
+MarketplaceService.ProcessReceipt = function(receipt)
+	local player = Players:GetPlayerByUserId(receipt.PlayerId)
+	if player then
+		for key, id in pairs(PRODUCT_IDS) do
+			if id > 0 and id == receipt.ProductId and grantProduct(player, key) then
+				save(player)
+				return Enum.ProductPurchaseDecision.PurchaseGranted
+			end
+		end
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
 local function onPlayer(player)
 	local ls = make("Folder", { Name = "leaderstats" }, player)
 	local profile = {
@@ -588,6 +701,7 @@ local function onPlayer(player)
 		return
 	end
 	profiles[player] = profile
+	task.spawn(loadPasses, player)
 	createHud(player)
 	profile.coins.Changed:Connect(function()
 		refreshHud(player)
@@ -625,6 +739,7 @@ for _, player in ipairs(Players:GetPlayers()) do
 end
 
 Players.PlayerRemoving:Connect(function(player)
+	passes[player] = nil
 	save(player)
 	local profile = profiles[player]
 	if profile and profile.plot then

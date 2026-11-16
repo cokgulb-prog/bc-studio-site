@@ -29,6 +29,35 @@ Si le fichier ne s'ouvre pas : crée une place vide (modèle *Baseplate*), ajout
 3. Paramètres du jeu → Places → nombre maximum de joueurs : **6** pour le tycoon,
    **8** pour le jardin (un terrain par joueur).
 
+## Contenu payant (Robux)
+
+Chaque jeu contient une boutique Robux (stands verts) déjà codée mais **désactivée**
+tant que les ID valent 0.
+
+| Jeu | Passes (achat unique) | Produits (rachetables) |
+| --- | --- | --- |
+| Néon Rush Obby | Vitesse turbo | Passer l'étape |
+| Force Légendaire | Énergie ×2, Clic automatique | Sac de pièces |
+| Usine à Bonbons Tycoon | Revenus ×2 | Valise d'argent |
+| Catastrophes en Folie | VIP (pièces ×2) | 100 pièces |
+| Jardin Enchanté | Engrais magique (pousse ×2) | Bourse de pièces |
+
+Pour les activer :
+
+1. Publie le jeu, puis va sur create.roblox.com → ton expérience → Monétisation.
+2. Crée chaque **passe** et chaque **produit développeur**, fixe son prix en Robux.
+3. Copie les ID dans `PASS_IDS` et `PRODUCT_IDS` (section « contenu payant » du
+   script), puis relance `python3 roblox/build.py` ou modifie le script dans Studio.
+
+À savoir :
+
+- Les œufs du simulateur s'achètent avec des pièces, elles-mêmes achetables en
+  Robux : c'est un tirage au sort payant au sens des règles Roblox, d'où
+  l'affichage des chances sur le stand. Ne retire pas cet affichage.
+- Convertir les Robux gagnés en argent réel (DevEx) est soumis aux conditions de
+  Roblox (âge, seuil minimal de Robux gagnés, vérification d'identité) : vérifie
+  les conditions en vigueur avant de compter dessus.
+
 ## Modifier
 
 Les réglages (prix, nombre d'étapes, durées…) sont regroupés en haut de chaque
